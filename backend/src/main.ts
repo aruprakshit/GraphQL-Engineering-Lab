@@ -1,5 +1,7 @@
 import express from "express";
 import { connectDatabase, database } from "./database.js";
+import { createHandler } from "graphql-http/lib/use/express";
+import { schema, rootValue } from "./graphql.js";
 
 interface LearningCheck {
   _id: string;
@@ -46,6 +48,9 @@ app.get("/learning-check", async (_req, res) => {
     });
   }
 });
+
+// HANDLE GRAPHQL HTTP REQUESTS
+app.all("/graphql", createHandler({ schema, rootValue }));
 
 // 3. CONNECT TO MONGODB BEFORE ACCEPTING HTTP REQUESTS
 const port = 4000;
