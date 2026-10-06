@@ -1,4 +1,10 @@
 import express from "express";
+import { connectDatabase, database } from "./database.js";
+
+interface LearningCheck {
+  _id: string;
+  message: string;
+}
 
 // 1. CREATE THE APPLICATION
 const app = express();
@@ -11,9 +17,48 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// 3. START LISTENING FOR REQUESTS
+// READ THE STORED LEARNING CHECK FROM MONGODB
+app.get("/learning-check", async (_req, res) => {
+  try {
+    // 1. FIND THE DOCUMENT
+    const collection = database.collection<LearningCheck>("learning_checks");
+
+    const document = await collection.findOne({
+      _id: "persistence-check",
+    });
+
+    // 2. HANDLE A MISSING DOCUMENT
+    if (!document) {
+      res.status(404).json({
+        error: "Learning check not found",
+      });
+      return;
+    }
+
+    // 3. RETURN THE DOCUMENT
+    res.json(document);
+  } catch (error: unknown) {
+    // 4. LOG THE FAILURE AND RETURN A GENERIC RESPONSE
+    console.error("Failed to read learning check:", error);
+
+    res.status(503).json({
+      error: "Database temporarily unavailable",
+    });
+  }
+});
+
+// 3. CONNECT TO MONGODB BEFORE ACCEPTING HTTP REQUESTS
 const port = 4000;
 
-app.listen(port, "0.0.0.0", () => {
-  console.log(`Express server listening on port ${port}`);
+async function start(): Promise<void> {
+  await connectDatabase();
+
+  app.listen(port, "0.0.0.0", () => {
+    console.log(`Express server listening on port ${port}`);
+  });
+}
+
+start().catch((error: unknown) => {
+  console.error("Application startup failed:", error);
+  process.exitCode = 1;
 });
