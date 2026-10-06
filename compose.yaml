@@ -3,14 +3,19 @@ services:
     image: node:26-alpine
     working_dir: /app
     user: "${LOCAL_UID:?Set LOCAL_UID}:${LOCAL_GID:?Set LOCAL_GID}"
-    environment:
-      npm_config_cache: /tmp/npm-cache
     volumes:
       - ./backend:/app
       - backend-dependencies:/app/node_modules
     ports:
       - "127.0.0.1:4000:4000"
     command: npm run dev
+    environment:
+      npm_config_cache: /tmp/npm-cache
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: graphql_engineering_lab
+    depends_on:
+      mongo:
+        condition: service_healthy
   mongo:
     image: mongo:9.0
     volumes:
