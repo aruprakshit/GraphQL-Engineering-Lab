@@ -11,8 +11,24 @@ services:
     ports:
       - "127.0.0.1:4000:4000"
     command: npm run dev
+  mongo:
+    image: mongo:9.0
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD
+        - mongosh
+        - --quiet
+        - --eval
+        - "quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
 volumes:
+  mongo-data:
   backend-dependencies:
     external: true
     name: graphql-lab-node-modules
