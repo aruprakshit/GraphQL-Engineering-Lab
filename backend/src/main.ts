@@ -2,6 +2,7 @@ import express from "express";
 import { connectDatabase, database } from "./database.js";
 import { createHandler } from "graphql-http/lib/use/express";
 import { schema, rootValue } from "./graphql.js";
+import { randomUUID } from "node:crypto";
 
 interface LearningCheck {
   _id: string;
@@ -55,9 +56,22 @@ app.all(
   createHandler({
     schema,
     rootValue,
-    context: () => ({
-      database,
-    }),
+    context: () => {
+      // EACH REQUEST GETS ITS OWN ID AND COUNTER
+      const requestId = randomUUID();
+      let databaseCalls = 0;
+
+      return {
+        database,
+        logDatabaseCall: (operation: string): void => {
+          databaseCalls += 1;
+
+          console.log(
+            `[request ${requestId}] DB call ${databaseCalls}: ${operation}`,
+          );
+        },
+      };
+    },
   }),
 );
 
