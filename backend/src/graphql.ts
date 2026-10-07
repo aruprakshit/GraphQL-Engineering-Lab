@@ -1,6 +1,6 @@
 import { buildSchema } from "graphql";
 
-export const schema = buildSchema(`
+export const schema = buildSchema(/* GraphQL */ `
   type LearningCheck {
     id: ID!
     message: String!
@@ -20,6 +20,21 @@ export const schema = buildSchema(`
   type Query {
     hello: String!
     learningCheck(id: ID!): LearningCheck
-    posts: [Post!]!
+    posts(first: Int = 5, after: String): PostConnection!
+  }
+
+  type PostEdge {
+    cursor: String!
+    node: Post!
+  }
+
+  type PageInfo {
+    hasNextPage: Boolean!
+    endCursor: String
+  }
+
+  type PostConnection {
+    edges: [PostEdge!]!
+    pageInfo: PageInfo!
   }
 `);

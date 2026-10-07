@@ -1,6 +1,11 @@
 import { GraphQLError } from "graphql";
 import type { GraphQLContext } from "../graphql-context.js";
 import type { PostDocument } from "../models.js";
+import {
+  encodePostCursor,
+  parsePostsArguments,
+  type PostsArguments,
+} from "../pagination.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
@@ -38,18 +43,46 @@ function toGraphQLPost(post: PostDocument, context: GraphQLContext) {
 }
 
 // FETCH THE BOUNDED LIST OF POSTS
-export async function resolvePosts(_args: unknown, context: GraphQLContext) {
-  try {
-    context.logDatabaseCall("posts.find");
+export async function resolvePosts(
+  args: PostsArguments,
+  context: GraphQLContext,
+) {
+  // 1. VALIDATE BEFORE PERFORMING DATABASE WORK
+  const { pageSize, afterId } = parsePostsArguments(args);
 
-    const posts = await context.database
+  try {
+    // 2. FETCH ONE EXTRA DOCUMENT TO DETECT ANOTHER PAGE
+    const filter = afterId === null ? {} : { _id: { $gt: afterId } };
+
+    context.logDatabaseCall(
+      `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
+    );
+
+    const documents = await context.database
       .collection<PostDocument>("posts")
-      .find({})
+      .find(filter)
       .sort({ _id: 1 })
-      .limit(5)
+      .limit(pageSize + 1)
       .toArray();
 
-    return posts.map((post) => toGraphQLPost(post, context));
+    // 3. KEEP ONLY THE REQUESTED PAGE
+    const hasNextPage = documents.length > pageSize;
+    const page = documents.slice(0, pageSize);
+
+    // 4. BUILD EDGES FOR THE RETURNED POSTS
+    const edges = page.map((post) => ({
+      cursor: encodePostCursor(post._id),
+      node: toGraphQLPost(post, context),
+    }));
+
+    // 5. RETURN THE CONNECTION AND PAGINATION METADATA
+    return {
+      edges,
+      pageInfo: {
+        hasNextPage,
+        endCursor: edges.at(-1)?.cursor ?? null,
+      },
+    };
   } catch (error: unknown) {
     console.error("Failed to resolve posts:", error);
 

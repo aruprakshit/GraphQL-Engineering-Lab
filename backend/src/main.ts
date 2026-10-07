@@ -5,6 +5,8 @@ import { randomUUID } from "node:crypto";
 import { createUserLoader } from "./loaders.js";
 import { schema } from "./graphql.js";
 import { rootValue } from "./resolvers/index.js";
+import { ruruHTML } from "ruru/server";
+import { serveStatic } from "ruru/static";
 
 interface LearningCheck {
   _id: string;
@@ -80,6 +82,19 @@ app.all(
     },
   }),
 );
+
+// SERVE THE GRAPHQL QUERY EDITOR AND ITS LOCAL ASSETS
+const playgroundConfig = {
+  endpoint: "/graphql",
+  staticPath: "/playground-assets/",
+};
+
+app.get("/playground", (_req, res) => {
+  res.type("html").send(ruruHTML(playgroundConfig));
+});
+
+app.use(serveStatic(playgroundConfig.staticPath));
+
 // 3. CONNECT TO MONGODB BEFORE ACCEPTING HTTP REQUESTS
 const port = 4000;
 
