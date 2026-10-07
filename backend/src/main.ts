@@ -50,7 +50,16 @@ app.get("/learning-check", async (_req, res) => {
 });
 
 // HANDLE GRAPHQL HTTP REQUESTS
-app.all("/graphql", createHandler({ schema, rootValue }));
+app.all(
+  "/graphql",
+  createHandler({
+    schema,
+    rootValue,
+    context: () => ({
+      database,
+    }),
+  }),
+);
 
 // 3. CONNECT TO MONGODB BEFORE ACCEPTING HTTP REQUESTS
 const port = 4000;
