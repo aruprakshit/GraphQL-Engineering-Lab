@@ -36,6 +36,20 @@ const posts: PostDocument[] = [
   },
 ];
 
+// ADD FIXED-WIDTH IDS FOR THE PAGINATION EXPERIMENT
+const paginationPosts: PostDocument[] = Array.from(
+  { length: 25 },
+  (_, index) => {
+    const number = index + 1;
+
+    return {
+      _id: `page-post-${String(number).padStart(3, "0")}`,
+      title: `Pagination example ${number}`,
+      authorId: `user-${(index % 3) + 1}`,
+    };
+  },
+);
+
 async function seed(): Promise<void> {
   try {
     await connectDatabase();
@@ -57,7 +71,7 @@ async function seed(): Promise<void> {
     const postResult = await database
       .collection<PostDocument>("posts")
       .bulkWrite(
-        posts.map((post) => ({
+        [...posts, ...paginationPosts].map((post) => ({
           updateOne: {
             filter: { _id: post._id },
             update: { $setOnInsert: post },
