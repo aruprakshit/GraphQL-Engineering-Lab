@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "dataloader": "^2.2.3",
     "express": "^5.2.1",
     "graphql": "^17.0.2",
     "graphql-http": "^1.23.1",

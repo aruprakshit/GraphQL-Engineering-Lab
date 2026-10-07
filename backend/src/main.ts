@@ -1,8 +1,10 @@
 import express from "express";
 import { connectDatabase, database } from "./database.js";
 import { createHandler } from "graphql-http/lib/use/express";
-import { schema, rootValue } from "./graphql.js";
 import { randomUUID } from "node:crypto";
+import { createUserLoader } from "./loaders.js";
+import { schema } from "./graphql.js";
+import { rootValue } from "./resolvers/index.js";
 
 interface LearningCheck {
   _id: string;
@@ -57,24 +59,27 @@ app.all(
     schema,
     rootValue,
     context: () => {
-      // EACH REQUEST GETS ITS OWN ID AND COUNTER
+      // 1. CREATE REQUEST-SPECIFIC LOGGING
       const requestId = randomUUID();
       let databaseCalls = 0;
 
+      const logDatabaseCall = (operation: string): void => {
+        databaseCalls += 1;
+
+        console.log(
+          `[request ${requestId}] DB call ${databaseCalls}: ${operation}`,
+        );
+      };
+
+      // 2. CREATE A FRESH LOADER FOR THIS REQUEST
       return {
         database,
-        logDatabaseCall: (operation: string): void => {
-          databaseCalls += 1;
-
-          console.log(
-            `[request ${requestId}] DB call ${databaseCalls}: ${operation}`,
-          );
-        },
+        logDatabaseCall,
+        userLoader: createUserLoader(database, logDatabaseCall),
       };
     },
   }),
 );
-
 // 3. CONNECT TO MONGODB BEFORE ACCEPTING HTTP REQUESTS
 const port = 4000;
 
