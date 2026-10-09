@@ -7,6 +7,7 @@ import {
   type PostsArguments,
 } from "../pagination.js";
 import { measureOperation } from "../timing.js";
+import { withSpan } from "../tracing.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
@@ -44,7 +45,7 @@ function toGraphQLPost(post: PostDocument, context: GraphQLContext) {
 }
 
 // FETCH THE BOUNDED LIST OF POSTS
-export async function resolvePosts(
+async function resolvePostsConnection(
   args: PostsArguments,
   context: GraphQLContext,
 ) {
@@ -106,4 +107,25 @@ export async function resolvePosts(
       extensions: { code: "SERVICE_UNAVAILABLE" },
     });
   }
+}
+
+// TRACE POSTS RESOLUTION WITHOUT MIXING TRACING INTO ITS IMPLEMENTATION
+export async function resolvePosts(
+  args: PostsArguments,
+  context: GraphQLContext,
+) {
+  return withSpan(
+    "graphql.posts",
+    { "app.request_id": context.requestId },
+    async (span) => {
+      const connection = await resolvePostsConnection(args, context);
+
+      span.setAttributes({
+        "posts.returned_count": connection.edges.length,
+        "posts.has_next_page": connection.pageInfo.hasNextPage,
+      });
+
+      return connection;
+    },
+  );
 }
