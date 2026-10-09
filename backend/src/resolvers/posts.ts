@@ -6,7 +6,6 @@ import {
   parsePostsArguments,
   type PostsArguments,
 } from "../pagination.js";
-import { measureOperation } from "../timing.js";
 import { withSpan } from "../tracing.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
@@ -60,17 +59,12 @@ async function resolvePostsConnection(
       `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
     );
 
-    const documents = await measureOperation(
-      context.requestId,
-      "posts.find",
-      () =>
-        context.database
-          .collection<PostDocument>("posts")
-          .find(filter)
-          .sort({ _id: 1 })
-          .limit(pageSize + 1)
-          .toArray(),
-    );
+    const documents = await context.database
+      .collection<PostDocument>("posts")
+      .find(filter)
+      .sort({ _id: 1 })
+      .limit(pageSize + 1)
+      .toArray();
 
     // 3. KEEP ONLY THE REQUESTED PAGE
     const hasNextPage = documents.length > pageSize;

@@ -1,7 +1,6 @@
 import DataLoader from "dataloader";
 import type { Db } from "mongodb";
 import type { UserDocument } from "./models.js";
-import { measureOperation } from "./timing.js";
 import { withSpan } from "./tracing.js";
 
 export function createUserLoader(
@@ -20,12 +19,10 @@ export function createUserLoader(
         // 1. FETCH ALL REQUESTED USERS IN ONE QUERY
         logDatabaseCall(`users.find $in=${JSON.stringify(ids)}`);
 
-        const users = await measureOperation(requestId, "users.find", () =>
-          database
-            .collection<UserDocument>("users")
-            .find({ _id: { $in: [...ids] } })
-            .toArray(),
-        );
+        const users = await database
+          .collection<UserDocument>("users")
+          .find({ _id: { $in: [...ids] } })
+          .toArray();
 
         // 2. RECORD THE BATCH RESULT SIZE
         span.setAttribute("dataloader.returned_user_count", users.length);
