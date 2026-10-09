@@ -6,7 +6,7 @@ import {
   parsePostsArguments,
   type PostsArguments,
 } from "../pagination.js";
-import { measureOperation } from "../timing.js";
+import { withSpan } from "../tracing.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
@@ -44,7 +44,7 @@ function toGraphQLPost(post: PostDocument, context: GraphQLContext) {
 }
 
 // FETCH THE BOUNDED LIST OF POSTS
-export async function resolvePosts(
+async function resolvePostsConnection(
   args: PostsArguments,
   context: GraphQLContext,
 ) {
@@ -59,17 +59,12 @@ export async function resolvePosts(
       `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
     );
 
-    const documents = await measureOperation(
-      context.requestId,
-      "posts.find",
-      () =>
-        context.database
-          .collection<PostDocument>("posts")
-          .find(filter)
-          .sort({ _id: 1 })
-          .limit(pageSize + 1)
-          .toArray(),
-    );
+    const documents = await context.database
+      .collection<PostDocument>("posts")
+      .find(filter)
+      .sort({ _id: 1 })
+      .limit(pageSize + 1)
+      .toArray();
 
     // 3. KEEP ONLY THE REQUESTED PAGE
     const hasNextPage = documents.length > pageSize;
@@ -106,4 +101,25 @@ export async function resolvePosts(
       extensions: { code: "SERVICE_UNAVAILABLE" },
     });
   }
+}
+
+// TRACE POSTS RESOLUTION WITHOUT MIXING TRACING INTO ITS IMPLEMENTATION
+export async function resolvePosts(
+  args: PostsArguments,
+  context: GraphQLContext,
+) {
+  return withSpan(
+    "graphql.posts",
+    { "app.request_id": context.requestId },
+    async (span) => {
+      const connection = await resolvePostsConnection(args, context);
+
+      span.setAttributes({
+        "posts.returned_count": connection.edges.length,
+        "posts.has_next_page": connection.pageInfo.hasNextPage,
+      });
+
+      return connection;
+    },
+  );
 }
