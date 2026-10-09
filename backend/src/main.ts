@@ -58,6 +58,7 @@ app.get("/learning-check", async (_req, res) => {
 // HANDLE GRAPHQL HTTP REQUESTS
 app.all("/graphql", (req, res, next) => {
   const requestId = res.locals.requestId as string;
+  const traceId = res.locals.traceId as string | undefined;
 
   const handler = createHandler({
     schema,
@@ -69,7 +70,13 @@ app.all("/graphql", (req, res, next) => {
         databaseCalls += 1;
 
         console.log(
-          `[request ${requestId}] DB call ${databaseCalls}: ${operation}`,
+          JSON.stringify({
+            event: "database_call",
+            requestId,
+            traceId,
+            callNumber: databaseCalls,
+            operation,
+          }),
         );
       };
 
