@@ -13,6 +13,10 @@ services:
       npm_config_cache: /tmp/npm-cache
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: graphql_engineering_lab
+      OTEL_SERVICE_NAME: graphql-engineering-lab
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     depends_on:
       mongo:
         condition: service_healthy
@@ -31,6 +35,10 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
+    ports:
+      - "127.0.0.1:16686:16686"
 
 volumes:
   mongo-data:
