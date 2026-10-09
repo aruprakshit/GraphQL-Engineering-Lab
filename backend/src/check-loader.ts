@@ -9,10 +9,14 @@ async function checkLoader(): Promise<void> {
     // 1. ARRANGE: CREATE A LOADER AND CAPTURE DATABASE CALLS
     const calls: string[] = [];
 
-    const loader = createUserLoader(database, (operation) => {
-      calls.push(operation);
-      console.log(operation);
-    });
+    const loader = createUserLoader(
+      database,
+      (operation) => {
+        calls.push(operation);
+        console.log(operation);
+      },
+      "loader-check",
+    );
 
     // 2. ACT: REQUEST REORDERED, MISSING, AND REPEATED IDS
     const results = await loader.loadMany([

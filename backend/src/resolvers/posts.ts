@@ -6,6 +6,7 @@ import {
   parsePostsArguments,
   type PostsArguments,
 } from "../pagination.js";
+import { measureOperation } from "../timing.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
@@ -58,12 +59,17 @@ export async function resolvePosts(
       `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
     );
 
-    const documents = await context.database
-      .collection<PostDocument>("posts")
-      .find(filter)
-      .sort({ _id: 1 })
-      .limit(pageSize + 1)
-      .toArray();
+    const documents = await measureOperation(
+      context.requestId,
+      "posts.find",
+      () =>
+        context.database
+          .collection<PostDocument>("posts")
+          .find(filter)
+          .sort({ _id: 1 })
+          .limit(pageSize + 1)
+          .toArray(),
+    );
 
     // 3. KEEP ONLY THE REQUESTED PAGE
     const hasNextPage = documents.length > pageSize;
@@ -74,6 +80,16 @@ export async function resolvePosts(
       cursor: encodePostCursor(post._id),
       node: toGraphQLPost(post, context),
     }));
+
+    console.log(
+      JSON.stringify({
+        event: "posts_page",
+        requestId: context.requestId,
+        fetchedCount: documents.length,
+        returnedCount: edges.length,
+        hasNextPage,
+      }),
+    );
 
     // 5. RETURN THE CONNECTION AND PAGINATION METADATA
     return {

@@ -1,12 +1,12 @@
 import express from "express";
 import { connectDatabase, database } from "./database.js";
 import { createHandler } from "graphql-http/lib/use/express";
-import { randomUUID } from "node:crypto";
 import { createUserLoader } from "./loaders.js";
 import { schema } from "./graphql.js";
 import { rootValue } from "./resolvers/index.js";
 import { ruruHTML } from "ruru/server";
 import { serveStatic } from "ruru/static";
+import { requestLogging } from "./request-logging.js";
 
 interface LearningCheck {
   _id: string;
@@ -15,6 +15,7 @@ interface LearningCheck {
 
 // 1. CREATE THE APPLICATION
 const app = express();
+app.use(requestLogging);
 
 // 2. REGISTER THE HEALTH ROUTE
 app.get("/health", (_req, res) => {
@@ -55,14 +56,13 @@ app.get("/learning-check", async (_req, res) => {
 });
 
 // HANDLE GRAPHQL HTTP REQUESTS
-app.all(
-  "/graphql",
-  createHandler({
+app.all("/graphql", (req, res, next) => {
+  const requestId = res.locals.requestId as string;
+
+  const handler = createHandler({
     schema,
     rootValue,
     context: () => {
-      // 1. CREATE REQUEST-SPECIFIC LOGGING
-      const requestId = randomUUID();
       let databaseCalls = 0;
 
       const logDatabaseCall = (operation: string): void => {
@@ -73,15 +73,17 @@ app.all(
         );
       };
 
-      // 2. CREATE A FRESH LOADER FOR THIS REQUEST
       return {
+        requestId,
         database,
         logDatabaseCall,
-        userLoader: createUserLoader(database, logDatabaseCall),
+        userLoader: createUserLoader(database, logDatabaseCall, requestId),
       };
     },
-  }),
-);
+  });
+
+  return handler(req, res, next);
+});
 
 // SERVE THE GRAPHQL QUERY EDITOR AND ITS LOCAL ASSETS
 const playgroundConfig = {
