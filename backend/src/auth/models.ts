@@ -19,3 +19,17 @@ export interface AccountDocument {
   role: "user" | "admin";
   password: PasswordRecord;
 }
+
+// SERVER-SIDE SESSION RECORD
+export interface SessionDocument {
+  _id: string;
+  accountId: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+// TRUSTED IDENTITY SUPPLIED TO APPLICATION SERVICES
+export interface Actor {
+  userId: string;
+  role: "user" | "admin";
+}
