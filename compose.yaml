@@ -39,6 +39,13 @@ services:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
     ports:
       - "127.0.0.1:16686:16686"
+  k6:
+    image: grafana/k6:1.0.0
+    profiles:
+      - loadtest
+    volumes:
+      - ./load-tests:/scripts:ro
+    command: run /scripts/posts.js
 
 volumes:
   mongo-data:
