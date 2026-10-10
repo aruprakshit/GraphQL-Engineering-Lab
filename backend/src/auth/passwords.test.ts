@@ -1,0 +1,81 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { hashPassword, verifyPassword } from "./passwords.js";
+
+test("password hashing and verification", async (t) => {
+  // ARRANGE: HASH ONE VALID PASSWORD FOR THE VERIFICATION CASES
+  const password = "A long learning password!";
+  const stored = await hashPassword(password);
+
+  await t.test("accepts the correct password", async () => {
+    // ACT
+    const matches = await verifyPassword(password, stored);
+
+    // ASSERT
+    assert.equal(matches, true);
+  });
+
+  await t.test("rejects an incorrect password", async () => {
+    // ACT
+    const matches = await verifyPassword(
+      "A different learning password!",
+      stored,
+    );
+
+    // ASSERT
+    assert.equal(matches, false);
+  });
+
+  await t.test("preserves password whitespace", async () => {
+    // ARRANGE
+    const spacedPassword = "  A long learning password!  ";
+    const spacedRecord = await hashPassword(spacedPassword);
+
+    // ACT AND ASSERT
+    assert.equal(await verifyPassword(spacedPassword, spacedRecord), true);
+    assert.equal(
+      await verifyPassword(spacedPassword.trim(), spacedRecord),
+      false,
+    );
+  });
+
+  await t.test("uses a fresh salt for the same password", async () => {
+    // ACT
+    const secondRecord = await hashPassword(password);
+
+    // ASSERT
+    assert.notEqual(secondRecord.salt, stored.salt);
+    assert.notEqual(secondRecord.hash, stored.hash);
+    assert.equal(await verifyPassword(password, secondRecord), true);
+  });
+
+  await t.test("rejects malformed stored credentials", async () => {
+    // ARRANGE
+    const malformedRecords: unknown[] = [
+      null,
+      {},
+      { ...stored, algorithm: "unknown" },
+      { ...stored, version: 2 },
+      { ...stored, salt: "invalid" },
+      { ...stored, hash: "00" },
+      { ...stored, parameters: null },
+      {
+        ...stored,
+        parameters: { ...stored.parameters, N: 2 ** 30 },
+      },
+    ];
+
+    // ACT AND ASSERT
+    for (const record of malformedRecords) {
+      assert.equal(await verifyPassword(password, record), false);
+    }
+  });
+
+  await t.test("rejects passwords outside the input limits", async () => {
+    // ACT AND ASSERT
+    await assert.rejects(hashPassword("short"), /15 and 128/);
+    await assert.rejects(hashPassword("x".repeat(129)), /15 and 128/);
+
+    assert.equal(await verifyPassword("short", stored), false);
+  });
+});

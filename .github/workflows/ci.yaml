@@ -35,4 +35,7 @@ jobs:
       - name: Check TypeScript
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
         id: install
-        run: npm run typecheck
+        run: npm run typecheck 
+      - name: Test password helpers
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm test
