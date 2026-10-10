@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/auth/passwords.test.ts",
+    "test": "tsx --test src/auth/passwords.test.ts src/auth/usernames.test.ts",
     "dev": "tsx watch --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./src/instrumentation.ts src/main.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier . --write",
