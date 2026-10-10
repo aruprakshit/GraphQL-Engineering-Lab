@@ -67,6 +67,36 @@ unique _id prevent duplicate accounts for the same user.
 Account identity is not independent in the current design.
 A separate account ID can be introduced if that requirement changes.
 
+## Account provisioning
+
+Ensure indexes exist:
+
+    docker compose exec backend npm run db:indexes
+
+Provision an existing public user:
+
+    docker compose exec backend npm run account:provision -- \
+      --user-id user-1 --username ada
+
+Passwords are entered through hidden prompts, not command arguments.
+New accounts default to the user role. The administrative command
+requires --admin to provision an admin.
+
+Provisioning never overwrites an existing account.
+
+### Verified behavior
+
+- Correct passwords verify; incorrect passwords fail.
+- Fresh hashes use different salts.
+- Malformed credential records and unsupported parameters are rejected.
+- Usernames are normalized and validated.
+- Duplicate provisioning preserves the original password and role.
+- A normalized username cannot belong to another account.
+- Missing public users cannot receive accounts.
+- Ordinary provisioning defaults to user.
+- Explicit --admin provisioning creates an admin account.
+- Verification output excludes stored credentials.
+
 ## Authentication flow
 
 ### Login
