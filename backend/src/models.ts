@@ -9,4 +9,5 @@ export interface PostDocument {
   _id: string;
   title: string;
   authorId: string;
+  status: "draft" | "published";
 }
