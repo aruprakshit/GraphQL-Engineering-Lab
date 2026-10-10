@@ -13,26 +13,31 @@ const posts: PostDocument[] = [
     _id: "post-1",
     title: "Learning GraphQL",
     authorId: "user-2",
+    status: "published",
   },
   {
     _id: "post-2",
     title: "Resolver basics",
     authorId: "user-1",
+    status: "published",
   },
   {
     _id: "post-3",
     title: "The N+1 problem",
     authorId: "user-2",
+    status: "published",
   },
   {
     _id: "post-4",
     title: "Batching requests",
     authorId: "user-3",
+    status: "published",
   },
   {
     _id: "post-5",
     title: "Request caching",
     authorId: "user-1",
+    status: "published",
   },
 ];
 
@@ -46,6 +51,7 @@ const paginationPosts: PostDocument[] = Array.from(
       _id: `page-post-${String(number).padStart(3, "0")}`,
       title: `Pagination example ${number}`,
       authorId: `user-${(index % 3) + 1}`,
+      status: "published",
     };
   },
 );
@@ -80,9 +86,25 @@ async function seed(): Promise<void> {
         })),
       );
 
+    // BACKFILL STATUS ONLY FOR OUR KNOWN SEED POSTS
+    const seedPostIds = [...posts, ...paginationPosts].map((post) => post._id);
+
+    const statusResult = await database
+      .collection<PostDocument>("posts")
+      .updateMany(
+        {
+          _id: { $in: seedPostIds },
+          status: { $exists: false },
+        },
+        {
+          $set: { status: "published" },
+        },
+      );
+
     console.log({
       usersInserted: userResult.upsertedCount,
       postsInserted: postResult.upsertedCount,
+      postStatusesBackfilled: statusResult.modifiedCount,
     });
   } finally {
     // 4. CLOSE CONNECTIONS SO THE ONE-OFF COMMAND CAN EXIT
