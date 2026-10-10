@@ -2,7 +2,7 @@ import http from "k6/http";
 import { check } from "k6";
 
 export const options = {
-  vus: 1,
+  vus: Number(__ENV.VUS || "1"),
   duration: "30s",
   summaryTrendStats: ["avg", "min", "med", "max", "p(95)"],
   thresholds: {
