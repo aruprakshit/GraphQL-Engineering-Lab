@@ -58,6 +58,15 @@ Authentication is planned but not yet implemented.
 - A database failure must not be reported as successful session revocation.
 - Authorization remains the responsibility of post services.
 
+## Account identity
+
+The private account record shares its _id with the public user record.
+This expresses our one-account-per-user relationship and lets MongoDB's
+unique _id prevent duplicate accounts for the same user.
+
+Account identity is not independent in the current design.
+A separate account ID can be introduced if that requirement changes.
+
 ## Authentication flow
 
 ### Login
