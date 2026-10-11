@@ -17,6 +17,7 @@ services:
       OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
+      AUTH_ALLOWED_ORIGIN: http://localhost:4000
     depends_on:
       mongo:
         condition: service_healthy

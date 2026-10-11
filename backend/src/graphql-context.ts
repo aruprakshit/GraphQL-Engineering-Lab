@@ -9,6 +9,6 @@ export interface GraphQLContext {
   logDatabaseCall: (operation: string) => void;
   userLoader: ReturnType<typeof createUserLoader>;
   verifyCredentials: Awaited<ReturnType<typeof createCredentialVerifier>>;
-
+  assertAuthRequest: () => void;
   setSessionCookie: (session: CreatedSession) => void;
 }

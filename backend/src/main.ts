@@ -10,6 +10,7 @@ import { requestLogging } from "./request-logging.js";
 import { createCredentialVerifier } from "./auth/credentials.js";
 import { setSessionCookie } from "./auth/cookies.js";
 import type { CreatedSession } from "./auth/models.js";
+import { createAuthRequestGuard } from "./auth/request-guard.js";
 
 interface LearningCheck {
   _id: string;
@@ -23,6 +24,14 @@ app.use(requestLogging);
 let verifyCredentials: Awaited<ReturnType<typeof createCredentialVerifier>>;
 
 const secureCookies = process.env.NODE_ENV === "production";
+
+const allowedAuthOrigin = process.env.AUTH_ALLOWED_ORIGIN;
+
+if (!allowedAuthOrigin) {
+  throw new Error("AUTH_ALLOWED_ORIGIN must be configured");
+}
+
+const assertAuthRequest = createAuthRequestGuard(allowedAuthOrigin);
 
 // 2. REGISTER THE HEALTH ROUTE
 app.get("/health", (_req, res) => {
@@ -95,6 +104,13 @@ app.all("/graphql", (req, res, next) => {
         verifyCredentials,
         setSessionCookie: (session: CreatedSession): void => {
           setSessionCookie(res, session, secureCookies);
+        },
+        assertAuthRequest: (): void => {
+          assertAuthRequest({
+            method: req.method,
+            origin: req.get("Origin"),
+            authHeader: req.get("X-GraphQL-Auth"),
+          });
         },
       };
     },
