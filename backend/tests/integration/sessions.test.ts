@@ -201,6 +201,37 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
         });
       }
     });
+
+    await t.test("rejects a session whose account is missing", async () => {
+      // ARRANGE
+      const session = await createSession(database, userId, now);
+
+      const account = await database
+        .collection<AccountDocument>("accounts")
+        .findOne({ _id: userId });
+
+      assert.ok(account);
+
+      try {
+        // ACT
+        await database
+          .collection<AccountDocument>("accounts")
+          .deleteOne({ _id: userId });
+
+        // ASSERT
+        assert.equal(await resolveSession(database, session.token, now), null);
+
+        await assert.rejects(
+          createSession(database, userId, now),
+          /unavailable account/,
+        );
+      } finally {
+        // RESTORE THE FIXTURE WITHOUT PRINTING ITS CREDENTIALS
+        await database
+          .collection<AccountDocument>("accounts")
+          .insertOne(account);
+      }
+    });
   } finally {
     // 5. CLEAN UP ONLY THIS TEST'S FIXTURES
     try {
