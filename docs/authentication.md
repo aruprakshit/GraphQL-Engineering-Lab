@@ -84,6 +84,16 @@ requires --admin to provision an admin.
 
 Provisioning never overwrites an existing account.
 
+## Session service
+
+- Generates opaque tokens from 32 cryptographically random bytes.
+- Stores only the token hash, account reference, and timestamps.
+- Enforces an eight-hour absolute expiry during lookup.
+- Reads the current account role and requires an existing public user.
+- Revokes only the supplied session; repeated revocation is safe.
+- Uses a TTL index for background cleanup, independent of expiry enforcement.
+- Propagates database failures instead of treating them as anonymous access.
+
 ### Verified behavior
 
 - Correct passwords verify; incorrect passwords fail.
@@ -96,6 +106,13 @@ Provisioning never overwrites an existing account.
 - Ordinary provisioning defaults to user.
 - Explicit --admin provisioning creates an admin account.
 - Verification output excludes stored credentials.
+- Integration tests cover session creation, hashed storage, expiry,
+  independent sessions, repeated revocation, current roles, missing users,
+  missing accounts, and database-access failure propagation.
+- Unit and integration tests run in separate CI jobs.
+  Integration tests use a dedicated MongoDB service and database.
+
+Login endpoints and session cookies are not yet implemented.
 
 ## Authentication flow
 
