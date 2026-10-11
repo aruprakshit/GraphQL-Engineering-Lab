@@ -11,7 +11,8 @@
     "format:check": "prettier . --check",
     "seed": "tsx src/seed.ts",
     "db:indexes": "tsx src/create-indexes.ts",
-    "account:provision": "tsx src/auth/provision.ts"
+    "account:provision": "tsx src/auth/provision.ts",
+    "test:integration": "tsx --test --test-concurrency=1 \"tests/integration/**/*.test.ts\""
   },
   "keywords": [],
   "author": "",

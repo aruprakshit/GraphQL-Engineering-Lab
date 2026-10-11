@@ -33,3 +33,9 @@ export interface Actor {
   userId: string;
   role: "user" | "admin";
 }
+
+// RETURNED TO THE CALLER; NEVER STORED OR LOGGED AS A WHOLE
+export interface CreatedSession {
+  token: string;
+  expiresAt: Date;
+}
