@@ -7,6 +7,9 @@ import { rootValue } from "./resolvers/index.js";
 import { ruruHTML } from "ruru/server";
 import { serveStatic } from "ruru/static";
 import { requestLogging } from "./request-logging.js";
+import { createCredentialVerifier } from "./auth/credentials.js";
+import { setSessionCookie } from "./auth/cookies.js";
+import type { CreatedSession } from "./auth/models.js";
 
 interface LearningCheck {
   _id: string;
@@ -16,6 +19,10 @@ interface LearningCheck {
 // 1. CREATE THE APPLICATION
 const app = express();
 app.use(requestLogging);
+
+let verifyCredentials: Awaited<ReturnType<typeof createCredentialVerifier>>;
+
+const secureCookies = process.env.NODE_ENV === "production";
 
 // 2. REGISTER THE HEALTH ROUTE
 app.get("/health", (_req, res) => {
@@ -85,6 +92,10 @@ app.all("/graphql", (req, res, next) => {
         database,
         logDatabaseCall,
         userLoader: createUserLoader(database, logDatabaseCall, requestId),
+        verifyCredentials,
+        setSessionCookie: (session: CreatedSession): void => {
+          setSessionCookie(res, session, secureCookies);
+        },
       };
     },
   });
@@ -109,6 +120,9 @@ const port = 4000;
 
 async function start(): Promise<void> {
   await connectDatabase();
+
+  // PRECOMPUTE THE DUMMY HASH ONCE BEFORE ACCEPTING REQUESTS
+  verifyCredentials = await createCredentialVerifier(database);
 
   app.listen(port, "0.0.0.0", () => {
     console.log(`Express server listening on port ${port}`);
