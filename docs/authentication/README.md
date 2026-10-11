@@ -1,12 +1,21 @@
 # Session authentication design
 
-Authentication is planned but not yet implemented.
+Credential provisioning and the session service are implemented and verified. Login, cookies, and request integration are planned.
+
+## Documentation
+
+- [GraphQL authentication design](login.md): mutations, queries, cookies, protection limits, and verification scenarios.
+- [Revised login ticket](login-ticket.md): copyable description for the existing GitHub issue.
 
 ## Operations
 
-- POST /auth/login accepts a username and password.
-- GET /auth/me returns public identity for a valid session.
-- POST /auth/logout revokes the current session and clears its cookie.
+All operations use /graphql within Express. Login is the current ticket;
+me, logout, and actor integration are planned follow-ups. Resolver errors
+are represented through GraphQL errors, not inferred from HTTP status alone.
+
+- Mutation.login accepts username/password input and sets the session cookie.
+- Query.me returns public identity for a valid session, or null without one.
+- Mutation.logout revokes the current session and clears its cookie.
 - GraphQL uses the same session service to populate context.actor.
 
 ## Credentials and provisioning
@@ -48,10 +57,10 @@ Authentication is planned but not yet implemented.
 
 ## Failure behavior
 
-- Invalid login credentials return the same generic 401 response.
+- Invalid login credentials return the same generic UNAUTHENTICATED GraphQL error.
 - No cookie, an invalid token, an expired session, or a revoked session
   produces no authenticated actor.
-- GET /auth/me returns 401 when no authenticated actor exists.
+- Query.me returns null when no authenticated actor exists.
 - Authentication-storage failure returns a generic service-unavailable
   error; it must not silently downgrade a session-bearing request to anonymous.
 - Missing or already revoked sessions can be logged out idempotently.
@@ -112,7 +121,7 @@ Provisioning never overwrites an existing account.
 - Unit and integration tests run in separate CI jobs.
   Integration tests use a dedicated MongoDB service and database.
 
-Login endpoints and session cookies are not yet implemented.
+GraphQL authentication operations and session cookies are not yet implemented.
 
 ## Authentication flow
 
@@ -125,7 +134,7 @@ sequenceDiagram
     participant A as Authentication service
     participant D as MongoDB
 
-    C->>E: POST /auth/login with credentials
+    C->>E: POST /graphql with login mutation and variables
     E->>A: Validate input and verify credentials
     A->>D: Load user and password hash
     D-->>A: User credential record
@@ -133,13 +142,13 @@ sequenceDiagram
 
     alt Invalid credentials
         A-->>E: Authentication failed
-        E-->>C: 401 with generic error
+        E-->>C: GraphQL UNAUTHENTICATED error
     else Valid credentials
         A->>A: Generate random token and hash it
         A->>D: Store token hash, user ID, and expiry
         D-->>A: Session stored
         A-->>E: Public identity and raw token
-        E-->>C: 200 with HttpOnly session cookie
+        E-->>C: data.login with HttpOnly session cookie
     end
 ```
 
@@ -192,7 +201,7 @@ sequenceDiagram
     participant S as Session service
     participant D as MongoDB
 
-    C->>E: POST /auth/logout with session cookie
+    C->>E: POST /graphql with logout mutation and cookie
     E->>S: Revoke current session
 
     alt Token supplied
@@ -204,7 +213,7 @@ sequenceDiagram
     end
 
     S-->>E: Logout completed
-    E-->>C: 204 and expired session cookie
+    E-->>C: data.logout true and expired session cookie
 ```
 
 Logout is idempotent when the session is missing or already revoked.
@@ -215,20 +224,20 @@ reporting successful revocation.
 
 | Scenario | Expected |
 |---|---|
-| Correct username and password | 200, session stored, session cookie set |
-| Incorrect password | Generic 401; no session created |
-| Unknown username | Same generic 401; no session created |
-| Malformed login input | 400; no session created |
-| Login when session storage fails | 503; no authenticated session issued |
-| Current-user request with valid session | 200 with public identity |
-| Current-user request without cookie | 401 |
-| Malformed, unknown, expired, or revoked token | 401 |
-| Session references a deleted user | 401 |
+| Correct username and password | data.login, session stored, cookie set |
+| Incorrect password | Generic UNAUTHENTICATED error; no session created |
+| Unknown username | Same generic UNAUTHENTICATED error; no session created |
+| Malformed login input | GraphQL validation or BAD_USER_INPUT error; no session created |
+| Login when session storage fails | SERVICE_UNAVAILABLE error; no authenticated session issued |
+| Query.me with valid session | Public identity |
+| Query.me without cookie | null |
+| Query.me with malformed, unknown, expired, or revoked token | null |
+| Query.me with a session referencing a deleted user | null |
 | User role changes after login | Next request uses the current role |
-| Authentication storage unavailable | 503; no anonymous fallback |
-| Logout with valid session | 204; session revoked and cookie cleared |
-| Logout with no session or an already revoked session | 204; cookie cleared |
-| Logout when revocation storage fails | 503; revocation not reported as successful |
+| Authentication storage unavailable | SERVICE_UNAVAILABLE error; no anonymous fallback |
+| Logout with valid session | true; session revoked and cookie cleared |
+| Logout with no session or an already revoked session | true; cookie cleared |
+| Logout when revocation storage fails | SERVICE_UNAVAILABLE error; revocation not reported as successful |
 | Two sessions exist and one logs out | Other session remains valid |
 | Disallowed browser origin on a state-changing request | Rejected before state changes |
 | Inspect logs, traces, and public responses | No password, password hash, or raw session token exposed |
@@ -238,3 +247,5 @@ and production configuration.
 
 A valid session establishes identity but does not bypass post
 authorization or publication business rules.
+
+
