@@ -8,10 +8,17 @@ import type {
   SessionDocument,
 } from "../../src/auth/models.js";
 import { hashPassword } from "../../src/auth/passwords.js";
-import { hashSessionToken } from "../../src/auth/session-tokens.js";
-import { createSession, resolveSession } from "../../src/auth/sessions.js";
+import {
+  hashSessionToken,
+  generateSessionToken,
+} from "../../src/auth/session-tokens.js";
+import {
+  createSession,
+  resolveSession,
+  revokeSession,
+} from "../../src/auth/sessions.js";
 
-test("creates a hashed session with eight-hour expiry and resolves its actor", async () => {
+test("creates a hashed session with eight-hour expiry and resolves its actor", async (t) => {
   // 1. ARRANGE: REQUIRE THE DEDICATED TEST DATABASE
   const url = process.env.TEST_MONGO_URL;
   const databaseName = process.env.TEST_MONGO_DB;
@@ -80,6 +87,119 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
     assert.deepEqual(actor, {
       userId,
       role: "user",
+    });
+
+    await t.test("rejects unknown and malformed tokens", async () => {
+      // ACT AND ASSERT
+      assert.equal(
+        await resolveSession(database, generateSessionToken(), now),
+        null,
+      );
+
+      assert.equal(await resolveSession(database, "invalid", now), null);
+      assert.equal(await resolveSession(database, undefined, now), null);
+    });
+
+    await t.test("enforces expiry without waiting for cleanup", async () => {
+      // ARRANGE
+      const session = await createSession(database, userId, now);
+
+      // ACT AND ASSERT: VALID JUST BEFORE EXPIRY
+      assert.deepEqual(
+        await resolveSession(
+          database,
+          session.token,
+          new Date(session.expiresAt.getTime() - 1),
+        ),
+        { userId, role: "user" },
+      );
+
+      // ACT AND ASSERT: INVALID AT THE EXACT EXPIRY TIME
+      assert.equal(
+        await resolveSession(database, session.token, session.expiresAt),
+        null,
+      );
+
+      // THE DOCUMENT STILL EXISTS: LOOKUP ENFORCED THE EXPIRY
+      assert.ok(
+        await database.collection<SessionDocument>("sessions").findOne({
+          _id: hashSessionToken(session.token),
+        }),
+      );
+    });
+
+    await t.test("revokes one session without affecting another", async () => {
+      // ARRANGE
+      const first = await createSession(database, userId, now);
+      const second = await createSession(database, userId, now);
+
+      assert.notEqual(first.token, second.token);
+
+      // ACT: REPEATED REVOCATION MUST BE SAFE
+      await revokeSession(database, first.token);
+      await revokeSession(database, first.token);
+
+      // ASSERT
+      assert.equal(await resolveSession(database, first.token, now), null);
+
+      assert.deepEqual(await resolveSession(database, second.token, now), {
+        userId,
+        role: "user",
+      });
+
+      assert.equal(
+        await database.collection<SessionDocument>("sessions").findOne({
+          _id: hashSessionToken(first.token),
+        }),
+        null,
+      );
+    });
+
+    await t.test("reads the current account role", async () => {
+      // ARRANGE
+      const session = await createSession(database, userId, now);
+
+      try {
+        // ACT: CHANGE ROLE AFTER SESSION CREATION
+        await database
+          .collection<AccountDocument>("accounts")
+          .updateOne({ _id: userId }, { $set: { role: "admin" } });
+
+        // ASSERT
+        assert.deepEqual(await resolveSession(database, session.token, now), {
+          userId,
+          role: "admin",
+        });
+      } finally {
+        await database
+          .collection<AccountDocument>("accounts")
+          .updateOne({ _id: userId }, { $set: { role: "user" } });
+      }
+    });
+
+    await t.test("rejects a session whose public user is missing", async () => {
+      // ARRANGE
+      const session = await createSession(database, userId, now);
+
+      try {
+        // ACT
+        await database
+          .collection<UserDocument>("users")
+          .deleteOne({ _id: userId });
+
+        // ASSERT
+        assert.equal(await resolveSession(database, session.token, now), null);
+
+        await assert.rejects(
+          createSession(database, userId, now),
+          /unavailable account/,
+        );
+      } finally {
+        await database.collection<UserDocument>("users").insertOne({
+          _id: userId,
+          name: "Session test user",
+        });
+      }
     });
   } finally {
     // 5. CLEAN UP ONLY THIS TEST'S FIXTURES
