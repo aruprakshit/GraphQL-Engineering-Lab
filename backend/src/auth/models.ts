@@ -19,3 +19,23 @@ export interface AccountDocument {
   role: "user" | "admin";
   password: PasswordRecord;
 }
+
+// SERVER-SIDE SESSION RECORD
+export interface SessionDocument {
+  _id: string;
+  accountId: string;
+  createdAt: Date;
+  expiresAt: Date;
+}
+
+// TRUSTED IDENTITY SUPPLIED TO APPLICATION SERVICES
+export interface Actor {
+  userId: string;
+  role: "user" | "admin";
+}
+
+// RETURNED TO THE CALLER; NEVER STORED OR LOGGED AS A WHOLE
+export interface CreatedSession {
+  token: string;
+  expiresAt: Date;
+}

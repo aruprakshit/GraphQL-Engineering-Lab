@@ -4,14 +4,15 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/auth/passwords.test.ts src/auth/usernames.test.ts",
+    "test": "tsx --test --test-concurrency=1 \"src/**/*.test.ts\"",
     "dev": "tsx watch --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import ./src/instrumentation.ts src/main.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
     "seed": "tsx src/seed.ts",
     "db:indexes": "tsx src/create-indexes.ts",
-    "account:provision": "tsx src/auth/provision.ts"
+    "account:provision": "tsx src/auth/provision.ts",
+    "test:integration": "tsx --test --test-concurrency=1 \"tests/integration/**/*.test.ts\""
   },
   "keywords": [],
   "author": "",
