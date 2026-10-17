@@ -1,3 +1,14 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Valid session with another active session | Returns logout: true, clears cookie, and revokes only the supplied session |
+ * | Missing, malformed, or already revoked session | Returns logout: true and clears cookie |
+ * | Request missing the required authentication header | Returns FORBIDDEN without revoking session or clearing cookie |
+ * | Session storage fails | Returns generic SERVICE_UNAVAILABLE, preserves session, and does not clear cookie |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";

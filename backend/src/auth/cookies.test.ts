@@ -7,6 +7,8 @@
  * | Production response | Same attributes plus Secure |
  * | Cookie lifetime and scope | Matches session expiry; no Domain attribute |
  * | Response caching and body | no-store; JSON contains only ok: true |
+ * | Clear development cookie | Empty session value, past expiry, matching scope and attributes without Secure |
+ * | Clear production cookie | Same clearing behavior with Secure |
  */
 
 import assert from "node:assert/strict";

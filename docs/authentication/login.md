@@ -1,29 +1,12 @@
-# GraphQL authentication design
+# GraphQL authentication contract
 
-Status: planned. Password provisioning and the session service are already
-verified; GraphQL login, cookies, and request integration are not implemented.
+Status: login, incoming session lookup, `me`, and logout are implemented.
+See [the authentication overview](README.md) for diagrams, storage design,
+verification commands, and remaining work.
 
-See [the authentication overview](README.md) for the session lifecycle.
+## Schema
 
-## Transport and responsibilities
-
-Authentication uses the existing POST /graphql endpoint inside Express.
-No REST authentication endpoints are planned.
-
-- Mutation.login verifies credentials, creates a session, and sets its cookie.
-- Query.me resolves the cookie to the current public identity.
-- Mutation.logout revokes the current session and clears its cookie.
-
-This ticket implements login. The me query, logout mutation, and general
-actor integration remain follow-up tickets. They are shown here to describe
-the complete target API.
-
-Resolvers call transport-independent authentication services. Cookie helpers
-are supplied through request context; services do not depend on Express.
-
-## Target schema
-
-Add these definitions to the existing schema; retain existing query fields.
+These are the authentication fields; existing query fields remain in the schema.
 
 ```graphql
 enum AccountRole {
@@ -56,13 +39,26 @@ type Mutation {
 }
 ```
 
-login and logout results are nullable so a field failure can be represented
-by null plus an error path. GraphQL operations are not database transactions:
-one successful mutation is not rolled back if another field fails.
+Stored roles are `user` and `admin`; resolvers map them to `USER` and `ADMIN`.
+Nullable root fields allow field errors without requiring the entire response to
+be null. GraphQL mutation fields execute serially, but they are not a transaction:
+a successful first field is not rolled back when a later field fails.
 
-Stored roles remain user/admin. Map them explicitly to USER/ADMIN in the API.
+## Playground walkthrough
 
-## Login operation and variables
+Open `/playground` and configure these request headers for login and logout:
+
+```json
+{
+  "X-GraphQL-Auth": "1"
+}
+```
+
+The browser supplies Origin automatically. Configure `AUTH_ALLOWED_ORIGIN` to
+match the application's exact origin, for example `http://localhost:4000`.
+A different host or port is a different origin.
+
+### Login
 
 ```graphql
 mutation Login($input: LoginInput!) {
@@ -76,220 +72,135 @@ mutation Login($input: LoginInput!) {
 }
 ```
 
-Example variables, not actual credentials:
+Example variables only; use your provisioned account and its actual password:
 
 ```json
 {
   "input": {
     "username": "ada",
-    "password": "example only; never log actual credentials"
+    "password": "example only; replace with your provisioned password"
   }
 }
 ```
 
-Clients should use variables. Credentials supplied as literals are still
-sensitive: logging the operation document can expose them too.
+The response contains public identity. `Set-Cookie` supplies the opaque token
+only after session storage succeeds. Inspect cookie attributes in DevTools;
+do not share actual passwords or cookie values.
 
-Normalize usernames, but preserve passwords exactly. Apply the existing
-password limits: 15–128 Unicode code points and at most 1024 UTF-8 bytes.
-GraphQL input validation rejects unknown fields, including role and userId.
+### Current identity
 
-## Successful result and cookie
-
-```json
-{
-  "data": {
-    "login": {
-      "user": {
-        "id": "user-1",
-        "name": "Ada",
-        "role": "USER"
-      }
-    }
+```graphql
+query CurrentUser {
+  me {
+    id
+    name
+    role
   }
 }
 ```
 
-Set the raw session token in Set-Cookie only after session storage succeeds.
-Never return the token or credential record as a GraphQL field.
+The browser sends the stored cookie. A valid session returns identity; missing,
+malformed, unknown, expired, or revoked sessions return `me: null` without an error.
+Deleted accounts or public users also produce no identity. Each request reads the
+current account role. Storage failure is an error, not an anonymous result.
+
+### Logout
+
+```graphql
+mutation Logout {
+  logout
+}
+```
+
+Success returns `logout: true`, deletes the incoming session, and expires its
+cookie. Running `me` afterward returns `null`. Repeating logout succeeds.
+Other sessions for the same account remain valid.
 
 ## Error contract
 
-Execution errors use errors[].extensions.code and identify the failing field
-through errors[].path. HTTP 200 alone does not indicate GraphQL success.
-Parsing, validation, media-type, and request-size failures happen at the
-transport/validation layer and can have different HTTP statuses.
+Inspect `errors[].extensions.code` and `errors[].path`, not just HTTP status.
+Parsing, validation, and transport failures can have different HTTP behavior
+from resolver execution errors.
 
-| Situation | Application error code | Behavior |
-|---|---|---|
-| Unknown username or incorrect password | UNAUTHENTICATED | Same message: Invalid username or password |
-| Invalid credential input | BAD_USER_INPUT | No password check or session creation |
-| Disallowed browser origin | FORBIDDEN | No authentication state change |
-| Login attempt rate exceeded | TOO_MANY_REQUESTS | No password check; retry guidance |
-| Password-check capacity exhausted | SERVICE_UNAVAILABLE | No waiting queue; retry guidance |
-| Account lookup, hashing, or session storage fails | SERVICE_UNAVAILABLE | Generic error; no successful login |
-| Additional login invocation in one request | BAD_USER_INPUT | No additional session or password check |
+| Situation | Code | Behavior |
+| --- | --- | --- |
+| Wrong password or unknown username | `UNAUTHENTICATED` | Same message: Invalid username or password |
+| Invalid username or password policy | `BAD_USER_INPUT` | No session created |
+| Additional login invocation in one request | `BAD_USER_INPUT` | No additional verification or session |
+| Invalid auth method, header, or supplied Origin | `FORBIDDEN` | No authentication state change |
+| Login IP allowance exhausted | `TOO_MANY_REQUESTS` | `retryAfterSeconds` in extensions |
+| Password verification capacity exhausted | `SERVICE_UNAVAILABLE` | `retryAfterSeconds: 1`; no waiting queue |
+| Login rate-limit storage exhausted or client IP missing | `SERVICE_UNAVAILABLE` | Generic login-unavailable response |
+| Account lookup, hashing, or session creation fails | `SERVICE_UNAVAILABLE` | No successful login or new cookie |
+| Session resolution fails | `SERVICE_UNAVAILABLE` | No anonymous fallback |
+| Public profile lookup fails during me | `SERVICE_UNAVAILABLE` | Generic user-unavailable response |
+| Session revocation fails | `SERVICE_UNAVAILABLE` | No cookie clearing or successful logout |
 
-Example execution failure:
+## Request protections and limits
 
-```json
-{
-  "errors": [
-    {
-      "message": "Invalid username or password",
-      "path": ["login"],
-      "extensions": { "code": "UNAUTHENTICATED" }
-    }
-  ],
-  "data": { "login": null }
-}
-```
+| Control | Implemented behavior |
+| --- | --- |
+| Authentication mutations | POST and `X-GraphQL-Auth: 1` required |
+| Supplied Origin | Exact match to configured allowed origin |
+| Missing Origin | Allowed with required method and header |
+| Password policy | 15-128 Unicode code points; at most 1024 UTF-8 bytes; whitespace preserved |
+| Verification concurrency | Two active checks per process, no waiting queue |
+| Login rate | Ten invocations per IP per 15-minute fixed window |
+| Attempt storage | At most 10,000 keys; reject new keys if full after expiry cleanup |
+| Login invocation guard | At most one attempt per request |
+| Session lifetime | Eight hours; no sliding renewal |
+| GraphQL caching | `Cache-Control: no-store` |
 
-## Request context
+Request validation happens before counting an attempt. After validation, both
+successful and failed invocations count; additional aliases also consume the IP
+allowance before the invocation guard rejects them. Unknown usernames use a dummy
+hash. This reduces a timing difference without making the whole request constant-time.
 
-The planned context supplies narrow helpers such as setSessionCookie and
-clearSessionCookie, backed by the current Express response.
+The limiter is shared across requests within one process. Restarting resets it;
+replicas do not share counts. Express uses connection-derived `req.ip` with default
+`trust proxy: false`; Docker may make clients share an address.
 
-It also supplies database access, request/trace IDs, and trusted request
-metadata for origin and IP checks. Clients cannot choose this metadata.
-Actor lookup will be added separately through the shared session service.
+The proposed 64 KiB JSON body cap is pending, not an implemented guarantee.
+Depth protection is deferred under ticket #32. Current authentication limits do
+not replace general depth, complexity, width, or response-size controls.
 
-## Initial resource limits
+## Implementation map
 
-| Control | Initial policy |
-|---|---|
-| GraphQL JSON body size | Maximum 64 KiB |
-| Password-check concurrency | Two active checks per backend process |
-| Password-check waiting queue | None; reject excess work |
-| Login attempt rate | Ten resolver attempts per IP per 15 minutes |
-| Attempts counted | Successful and unsuccessful login invocations |
-| Session lifetime | Eight hours, without sliding renewal |
+Paths below are relative to `backend/`.
 
-The body cap applies to all /graphql operations, not only login. It replaces
-the previously proposed 4 KiB REST-login cap. Verify playground introspection
-and existing publishing operations fit before adopting it.
+| File | Responsibility |
+| --- | --- |
+| `src/main.ts` | Extract cookie, create per-request helpers, connect Express response helpers |
+| `src/graphql-context.ts` | Typed resolver dependencies |
+| `src/resolvers/index.ts` | Register login, me, and logout in rootValue |
+| `src/resolvers/login.ts` | Guards, verification, session creation, cookie issuance |
+| `src/resolvers/me.ts` | Resolve actor and read public profile |
+| `src/resolvers/logout.ts` | Request guard, revocation, cookie clearing |
+| `src/auth/request-guard.ts` | Method, custom header, and Origin policy |
+| `src/auth/login-attempt.ts` | Request-scoped login guard and shared limiter use |
+| `src/auth/login-rate-limit.ts` | Bounded in-memory attempt windows |
+| `src/auth/credentials.ts` | Credential lookup and real/dummy verification |
+| `src/auth/concurrency.ts` | Bound active password verification work |
+| `src/auth/session-cookie.ts` | Strict extraction of incoming token |
+| `src/auth/request-actor.ts` | Lazy per-request actor Promise and sanitized errors |
+| `src/auth/sessions.ts` | Transport-independent session creation, lookup, revocation |
+| `src/auth/cookies.ts` | Express cookie setting and clearing |
 
-These are conservative learning defaults, not measured production limits.
-Two active hashes require approximately 256 MiB plus application overhead.
+`getActor()` shares a Promise within the request, including a null result or
+rejection. It is not a global identity cache. Logout uses the incoming token
+directly, without actor lookup or login rate counting.
 
-Acquire the concurrency slot before account lookup and real/dummy password
-verification. Release it in finally. Session creation follows verification.
+## Boundaries and follow-ups
 
-Rate-limit storage and proxy/IP trust must be defined before implementation
-is complete. Per-process controls are not global across replicas.
-Depth validation remains deferred under ticket #32; this body cap does not
-substitute for depth, complexity, or query-width controls.
+Authentication supplies identity. Post authorization and publication rules still
+need service-level implementation; they are not automatically applied to existing
+post queries by adding login.
 
-## Aliases and mutation execution
+One successful login is not rolled back if a later login alias fails. Combining
+login and logout within the same operation still needs an explicit policy and
+tests: logout currently targets the incoming cookie, and an already resolved actor
+stays cached for the request. Use separate operations for the documented flow.
 
-Top-level mutation fields execute serially, but aliases can invoke login
-multiple times in one HTTP request. Rate limiting must count resolver attempts,
-not merely HTTP requests.
-
-For the initial implementation, a request-scoped guard allows at most one
-login invocation. Additional invocations fail before password verification
-or session creation. They still count as login attempts for the rate policy.
-
-A first successful login is not rolled back if a later alias fails. Its cookie
-and stored session remain. Future combinations of login and logout require an
-explicit policy and tests when logout is introduced.
-
-## Login flow
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant H as Express GraphQL handler
-    participant R as Login resolver
-    participant A as Authentication service
-    participant D as MongoDB
-
-    C->>H: POST /graphql with mutation and variables
-    H->>H: Bound body, parse, and validate operation
-    H->>R: Execute login with request context
-    R->>R: Check origin, attempt rate, and invocation guard
-    R->>A: Verify credentials under bounded concurrency
-    A->>D: Load account
-    D-->>A: Account or no match
-    A->>A: Verify real or dummy password hash
-    Note over A: Release concurrency slot in finally
-
-    alt Invalid credentials
-        A-->>R: Authentication failed
-        R-->>H: UNAUTHENTICATED error
-        H-->>C: errors and null login result
-    else Valid credentials
-        A->>D: Store hashed session token and expiry
-        D-->>A: Session stored
-        A-->>R: Public identity and created session
-        R->>R: Set cookie through context helper
-        R-->>H: Public login payload
-        H-->>C: data.login and HttpOnly cookie
-    end
-```
-
-Storage or hashing failures return a generic service-unavailable error.
-A failed invocation does not issue a new session cookie.
-
-## Unknown-user handling
-
-Precompute a dummy password record using the same supported scrypt settings.
-Unknown usernames verify against it instead of skipping expensive work.
-Both unknown usernames and incorrect passwords receive the same error message.
-Dummy verification reduces one timing difference; it does not make the entire
-request constant-time.
-
-## Cookies and browser protection
-
-- session cookie: HttpOnly, SameSite=Lax, Path=/, no Domain.
-- Local HTTP: Secure=false. Production: HTTPS and Secure=true.
-- Cookie lifetime matches session expiry.
-- Protect login and other cookie-based mutations against CSRF.
-- Define an exact allowed browser origin and missing-Origin policy for CLI tools.
-- Reject mutations over GET; GET queries must not create or revoke sessions.
-- Define CORS/preflight policy if separate browser origins are supported.
-- SameSite alone is not the complete CSRF protection.
-
-## Sensitive-data handling
-
-Do not log or trace passwords, credential records, raw session tokens, Cookie
-headers, Set-Cookie headers, request variables, or authentication documents
-containing credential literals.
-
-Audit HTTP, MongoDB, and any future GraphQL instrumentation for sensitive
-attributes. Request/trace IDs and credential-free operation names may be logged.
-
-## Verification scenarios
-
-| Scenario | Expected |
-|---|---|
-| Correct provisioned credentials | Public login payload, stored session, cookie set |
-| Incorrect password | UNAUTHENTICATED; no session created |
-| Unknown username | Same error; dummy verification performed |
-| Invalid GraphQL input shape | Validation rejection before resolver execution |
-| Invalid username/password policy | BAD_USER_INPUT; no session created |
-| Oversized GraphQL JSON | HTTP 413 before credential processing |
-| Disallowed browser origin | Rejected before authentication state changes |
-| Attempt rate exceeded | TOO_MANY_REQUESTS; no password check |
-| Both password slots occupied | SERVICE_UNAVAILABLE for excess work |
-| Verification throws or rejects credentials | Slot released |
-| Storage failure | Generic SERVICE_UNAVAILABLE; no successful login |
-| Multiple login aliases | Additional invocation rejected; attempt policy enforced |
-| Login invoked through fragments | Same protection as a direct invocation |
-| Mutation sent through GET | Rejected; no session created |
-| Successful login | No credential fields in the result |
-| Log and trace inspection | No credentials, tokens, or cookie headers exposed |
-| Existing queries and introspection | Continue to work under the body cap |
-
-## Implementation checkpoints
-
-1. Add the login schema and context cookie interface.
-2. Implement and unit-test the concurrency limiter.
-3. Implement credential verification and dummy-record handling.
-4. Add origin, rate, and request-scoped invocation protections.
-5. Wire the resolver, bounded transport input, and cookie response.
-6. Verify results, errors, alias/fragment behavior, and sensitive-data handling.
-7. Record verification and complete CI checks.
-
-Make small commits after verified checkpoints. me, logout, and general actor
-integration remain separate follow-up tickets.
+Keep passwords, password records, raw tokens, cookie headers, and sensitive
+GraphQL documents or variables out of logs and traces. An instrumentation audit
+remains a follow-up; using variables alone does not establish safe logging.
