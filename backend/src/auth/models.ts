@@ -39,3 +39,12 @@ export interface CreatedSession {
   token: string;
   expiresAt: Date;
 }
+
+export interface LoginCredentials {
+  username: string;
+  password: string;
+}
+
+export interface AuthenticatedIdentity extends Actor {
+  name: string;
+}

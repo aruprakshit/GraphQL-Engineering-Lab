@@ -1,3 +1,13 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Generate two tokens | Valid distinct 64-character lowercase hex tokens |
+ * | Hash token repeatedly | Consistent hex hash different from raw token |
+ * | Malformed input | Validation returns false; hashing invalid string throws |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

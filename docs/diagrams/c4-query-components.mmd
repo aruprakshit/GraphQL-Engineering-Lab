@@ -1,0 +1,19 @@
+flowchart TB
+    client["API client<br/>[External to backend]"]
+    subgraph backend["Backend API container - query components"]
+        transport["HTTP entry and request logging<br/>[Component: Express]<br/>Routes requests and attaches correlation IDs"]
+        execution["GraphQL execution and request context<br/>[Component: graphql-http, schema, rootValue]<br/>Validates operations and dispatches fields<br/>Creates a fresh user loader per request"]
+        posts["Posts resolver and pagination<br/>[Component: TypeScript]<br/>Validates cursor and page size<br/>Fetches first + 1 and builds connection"]
+        loader["User DataLoader<br/>[Component: DataLoader]<br/>Batches and caches author lookups<br/>Preserves input order and missing values"]
+        transport -->|Delegates /graphql requests| execution
+        execution -->|Resolves posts field| posts
+        posts -->|Author field calls load by ID| loader
+    end
+    db[("Application database<br/>[Container: MongoDB]")]
+    client -->|HTTP query| transport
+    posts -->|Find posts sorted by _id with cursor and limit| db
+    loader -->|Find users using batched IDs| db
+    classDef component fill:#85bbf0,color:#102a43,stroke:#3777b5
+    classDef external fill:#666,color:#fff,stroke:#444
+    class transport,execution,posts,loader component
+    class client,db external

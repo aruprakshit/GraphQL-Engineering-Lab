@@ -1,0 +1,15 @@
+flowchart TB
+    reader["Learner / API client<br/>[Person]<br/>Explores posts and signs in"]
+    engineer["Developer / operator<br/>[Person]<br/>Maintains accounts and investigates behavior"]
+    system["GraphQL Engineering Lab<br/>[Software system]<br/>Paginated post API and session-based login"]
+    tracing["Jaeger<br/>[Supporting software system]<br/>Stores and displays development traces"]
+    reader -->|Reads posts and submits login| system
+    engineer -->|Provisions accounts and operates app| system
+    system -->|Exports execution traces| tracing
+    engineer -->|Inspects traces| tracing
+    classDef person fill:#08427b,color:#fff,stroke:#052e56
+    classDef system fill:#1168bd,color:#fff,stroke:#0b4884
+    classDef external fill:#666,color:#fff,stroke:#444
+    class reader,engineer person
+    class system system
+    class tracing external

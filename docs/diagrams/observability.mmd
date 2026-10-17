@@ -1,0 +1,12 @@
+flowchart LR
+    B[Backend execution] --> L[JSON logs on container stdout]
+    B --> O[OpenTelemetry spans]
+    O -->|OTLP HTTP| J[Jaeger trace UI]
+    L --- I[Correlate with requestId and traceId]
+    J --- I
+    K[k6 loadtest profile] -->|HTTP workload| B
+    T[Integration test runner] --> D[(Dedicated test-mongo)]
+    CI[GitHub Actions] --> Q[Formatting and typecheck]
+    CI --> U[Unit tests]
+    CI --> IT[Integration tests with MongoDB service]
+

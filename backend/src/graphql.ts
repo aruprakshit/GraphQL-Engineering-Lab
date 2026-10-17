@@ -17,12 +17,6 @@ export const schema = buildSchema(/* GraphQL */ `
     author: User
   }
 
-  type Query {
-    hello: String!
-    learningCheck(id: ID!): LearningCheck
-    posts(first: Int = 5, after: String): PostConnection!
-  }
-
   type PostEdge {
     cursor: String!
     node: Post!
@@ -36,5 +30,37 @@ export const schema = buildSchema(/* GraphQL */ `
   type PostConnection {
     edges: [PostEdge!]!
     pageInfo: PageInfo!
+  }
+
+  enum AccountRole {
+    USER
+    ADMIN
+  }
+
+  input LoginInput {
+    username: String!
+    password: String!
+  }
+
+  type AuthUser {
+    id: ID!
+    name: String!
+    role: AccountRole!
+  }
+
+  type LoginPayload {
+    user: AuthUser!
+  }
+
+  type Mutation {
+    login(input: LoginInput!): LoginPayload
+    logout: Boolean
+  }
+
+  type Query {
+    hello: String!
+    learningCheck(id: ID!): LearningCheck
+    posts(first: Int = 5, after: String): PostConnection!
+    me: AuthUser
   }
 `);

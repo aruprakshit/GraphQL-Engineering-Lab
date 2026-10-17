@@ -1,0 +1,26 @@
+flowchart LR
+    C[Browser or curl]
+    subgraph Docker[Local Docker Compose network]
+        subgraph Backend[backend container - one Node.js process]
+            E[Express routes and request logging]
+            G[graphql-http and GraphQL schema]
+            R[Root resolvers]
+            D[Request-scoped user DataLoader]
+            A[Login guards and authentication services]
+            O[OpenTelemetry instrumentation]
+            E --> G --> R
+            R --> D
+            R --> A
+        end
+        M[(MongoDB)]
+        V[(mongo-data volume)]
+        J[Jaeger]
+        R -->|Post page and learning check| M
+        D -->|Batched user lookup| M
+        A -->|Accounts and sessions| M
+        M --- V
+        O -. OTLP traces .-> J
+    end
+    C -->|localhost:4000| E
+    C -->|localhost:16686| J
+

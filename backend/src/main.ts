@@ -7,6 +7,15 @@ import { rootValue } from "./resolvers/index.js";
 import { ruruHTML } from "ruru/server";
 import { serveStatic } from "ruru/static";
 import { requestLogging } from "./request-logging.js";
+import { createCredentialVerifier } from "./auth/credentials.js";
+import { setSessionCookie, clearSessionCookie } from "./auth/cookies.js";
+import type { CreatedSession } from "./auth/models.js";
+import { createAuthRequestGuard } from "./auth/request-guard.js";
+import { createLoginRateLimiter } from "./auth/login-rate-limit.js";
+import { createLoginAttemptGuard } from "./auth/login-attempt.js";
+import { readSessionCookie } from "./auth/session-cookie.js";
+import { resolveSession } from "./auth/sessions.js";
+import { createRequestActor } from "./auth/request-actor.js";
 
 interface LearningCheck {
   _id: string;
@@ -16,6 +25,19 @@ interface LearningCheck {
 // 1. CREATE THE APPLICATION
 const app = express();
 app.use(requestLogging);
+
+let verifyCredentials: Awaited<ReturnType<typeof createCredentialVerifier>>;
+
+const secureCookies = process.env.NODE_ENV === "production";
+
+const allowedAuthOrigin = process.env.AUTH_ALLOWED_ORIGIN;
+
+if (!allowedAuthOrigin) {
+  throw new Error("AUTH_ALLOWED_ORIGIN must be configured");
+}
+
+const assertAuthRequest = createAuthRequestGuard(allowedAuthOrigin);
+const loginRateLimiter = createLoginRateLimiter();
 
 // 2. REGISTER THE HEALTH ROUTE
 app.get("/health", (_req, res) => {
@@ -57,8 +79,26 @@ app.get("/learning-check", async (_req, res) => {
 
 // HANDLE GRAPHQL HTTP REQUESTS
 app.all("/graphql", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
   const requestId = res.locals.requestId as string;
   const traceId = res.locals.traceId as string | undefined;
+
+  const sessionToken = readSessionCookie(req.get("Cookie"));
+  const getActor = createRequestActor(() =>
+    resolveSession(database, sessionToken),
+  );
+
+  const beginLogin = createLoginAttemptGuard({
+    assertAuthRequest: () => {
+      assertAuthRequest({
+        method: req.method,
+        origin: req.get("Origin"),
+        authHeader: req.get("X-GraphQL-Auth"),
+      });
+    },
+    rateLimiter: loginRateLimiter,
+    clientIp: req.ip,
+  });
 
   const handler = createHandler({
     schema,
@@ -85,6 +125,24 @@ app.all("/graphql", (req, res, next) => {
         database,
         logDatabaseCall,
         userLoader: createUserLoader(database, logDatabaseCall, requestId),
+        verifyCredentials,
+        rateLimiter: loginRateLimiter,
+        beginLogin,
+        getActor,
+        setSessionCookie: (session: CreatedSession): void => {
+          setSessionCookie(res, session, secureCookies);
+        },
+        assertAuthRequest: (): void => {
+          assertAuthRequest({
+            method: req.method,
+            origin: req.get("Origin"),
+            authHeader: req.get("X-GraphQL-Auth"),
+          });
+        },
+        sessionToken,
+        clearSessionCookie: (): void => {
+          clearSessionCookie(res, secureCookies);
+        },
       };
     },
   });
@@ -109,6 +167,9 @@ const port = 4000;
 
 async function start(): Promise<void> {
   await connectDatabase();
+
+  // PRECOMPUTE THE DUMMY HASH ONCE BEFORE ACCEPTING REQUESTS
+  verifyCredentials = await createCredentialVerifier(database);
 
   app.listen(port, "0.0.0.0", () => {
     console.log(`Express server listening on port ${port}`);
