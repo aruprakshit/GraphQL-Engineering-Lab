@@ -7,6 +7,7 @@ import {
   type PostsArguments,
 } from "../pagination.js";
 import { withSpan } from "../tracing.js";
+import { listVisiblePosts } from "../posts/service.js";
 
 // FETCH AN AUTHOR USING THE REQUEST'S LOADER
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
@@ -48,30 +49,21 @@ async function resolvePostsConnection(
   args: PostsArguments,
   context: GraphQLContext,
 ) {
-  // 1. VALIDATE BEFORE PERFORMING DATABASE WORK
+  // VALIDATE BEFORE AUTHENTICATION OR POST DATABASE WORK.
   const { pageSize, afterId } = parsePostsArguments(args);
 
-  try {
-    // 2. FETCH ONE EXTRA DOCUMENT TO DETECT ANOTHER PAGE
-    const filter = afterId === null ? {} : { _id: { $gt: afterId } };
+  // AUTHENTICATION FAILURE MUST NOT BECOME ANONYMOUS ACCESS.
+  const actor = await context.getActor();
 
-    context.logDatabaseCall(
-      `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
+  try {
+    const { posts, hasNextPage } = await listVisiblePosts(
+      context.database,
+      actor,
+      { pageSize, afterId },
+      context.logDatabaseCall,
     );
 
-    const documents = await context.database
-      .collection<PostDocument>("posts")
-      .find(filter)
-      .sort({ _id: 1 })
-      .limit(pageSize + 1)
-      .toArray();
-
-    // 3. KEEP ONLY THE REQUESTED PAGE
-    const hasNextPage = documents.length > pageSize;
-    const page = documents.slice(0, pageSize);
-
-    // 4. BUILD EDGES FOR THE RETURNED POSTS
-    const edges = page.map((post) => ({
+    const edges = posts.map((post) => ({
       cursor: encodePostCursor(post._id),
       node: toGraphQLPost(post, context),
     }));
@@ -80,13 +72,11 @@ async function resolvePostsConnection(
       JSON.stringify({
         event: "posts_page",
         requestId: context.requestId,
-        fetchedCount: documents.length,
         returnedCount: edges.length,
         hasNextPage,
       }),
     );
 
-    // 5. RETURN THE CONNECTION AND PAGINATION METADATA
     return {
       edges,
       pageInfo: {
@@ -94,9 +84,7 @@ async function resolvePostsConnection(
         endCursor: edges.at(-1)?.cursor ?? null,
       },
     };
-  } catch (error: unknown) {
-    console.error("Failed to resolve posts:", error);
-
+  } catch {
     throw new GraphQLError("Database temporarily unavailable", {
       extensions: { code: "SERVICE_UNAVAILABLE" },
     });

@@ -1,10 +1,39 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Service: anonymous caller | Returns only published posts |
+ * | Service: signed-in author | Returns published posts and only that author's drafts |
+ * | Service: admin caller | Returns every post |
+ * | Hidden drafts before or after visible posts | Do not consume page slots or imply another visible page |
+ * | Pagination for an author | Returns consecutive pages from the authorized set with correct hasNextPage |
+ * | Cursor points to a hidden draft | Uses its position without granting access to hidden posts |
+ * | Cursor follows the last visible post | Returns an empty page with hasNextPage: false |
+ * | Invalid page size or cursor boundary from a direct service caller | Rejects invalid arguments |
+ * | GraphQL: anonymous, author, and admin sessions | Returns authorized posts with matching author names, encoded cursors, and pageInfo |
+ * | GraphQL: author requests consecutive pages | Preserves encoded cursors and correct pageInfo across authorized pages |
+ * | GraphQL: authentication storage fails | Returns generic SERVICE_UNAVAILABLE at posts and data: null; no anonymous fallback |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { MongoClient } from "mongodb";
-import type { PostDocument } from "../../src/models.js";
+import type { PostDocument, UserDocument } from "../../src/models.js";
 import type { Actor } from "../../src/auth/models.js";
 import { listVisiblePosts } from "../../src/posts/service.js";
+import { graphql } from "graphql";
+import { schema } from "../../src/graphql.js";
+import { rootValue } from "../../src/resolvers/index.js";
+import type { GraphQLContext } from "../../src/graphql-context.js";
+import type { AccountDocument, CreatedSession } from "../../src/auth/models.js";
+import { hashPassword } from "../../src/auth/passwords.js";
+import { createSession, resolveSession } from "../../src/auth/sessions.js";
+import { readSessionCookie } from "../../src/auth/session-cookie.js";
+import { createRequestActor } from "../../src/auth/request-actor.js";
+import { createUserLoader } from "../../src/loaders.js";
+import { encodePostCursor } from "../../src/pagination.js";
 
 test("post service visibility and pagination", async (t) => {
   const url = process.env.TEST_MONGO_URL;
@@ -218,6 +247,235 @@ test("post service visibility and pagination", async (t) => {
         );
       }
     });
+
+    await t.test(
+      "GraphQL applies session identity and post visibility",
+      async (t) => {
+        const password = await hashPassword(
+          "Post visibility fixture password!",
+        );
+
+        await database.collection<UserDocument>("users").insertMany([
+          { _id: "ada", name: "Ada" },
+          { _id: "grace", name: "Grace" },
+          { _id: "admin", name: "Admin" },
+        ]);
+
+        await database.collection<AccountDocument>("accounts").insertMany([
+          {
+            _id: "ada",
+            username: "ada",
+            role: "user",
+            password,
+          },
+          {
+            _id: "grace",
+            username: "grace",
+            role: "user",
+            password,
+          },
+          {
+            _id: "admin",
+            username: "admin",
+            role: "admin",
+            password,
+          },
+        ]);
+
+        const sessions = {
+          ada: await createSession(database, "ada"),
+          grace: await createSession(database, "grace"),
+          admin: await createSession(database, "admin"),
+        };
+
+        const source = /* GraphQL */ `
+          query VisiblePosts($first: Int!, $after: String) {
+            posts(first: $first, after: $after) {
+              edges {
+                cursor
+                node {
+                  id
+                  author {
+                    name
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        `;
+
+        async function executePosts(
+          session: CreatedSession | null,
+          first = 20,
+          after: string | null = null,
+          authenticationDatabase = database,
+        ) {
+          const cookie = session ? `session=${session.token}` : undefined;
+          const token = readSessionCookie(cookie);
+
+          const unexpectedCall = (): never => {
+            throw new Error("Posts query invoked a mutation helper");
+          };
+
+          const context: GraphQLContext = {
+            requestId: randomUUID(),
+            database,
+            logDatabaseCall: () => {},
+            userLoader: createUserLoader(
+              database,
+              () => {},
+              "post-visibility-test",
+            ),
+            sessionToken: token,
+            getActor: createRequestActor(() =>
+              resolveSession(authenticationDatabase, token),
+            ),
+            verifyCredentials: async () => unexpectedCall(),
+            beginLogin: unexpectedCall,
+            assertAuthRequest: unexpectedCall,
+            setSessionCookie: unexpectedCall,
+            clearSessionCookie: unexpectedCall,
+          };
+
+          return graphql({
+            schema,
+            rootValue,
+            source,
+            variableValues: { first, after },
+            contextValue: context,
+          });
+        }
+
+        await t.test(
+          "returns only the posts visible to each caller",
+          async () => {
+            const scenarios = [
+              {
+                session: null,
+                ids: ["post-01", "post-04"],
+                authors: ["Grace", "Ada"],
+              },
+              {
+                session: sessions.ada,
+                ids: ["post-01", "post-03", "post-04", "post-06"],
+                authors: ["Grace", "Ada", "Ada", "Ada"],
+              },
+              {
+                session: sessions.grace,
+                ids: ["post-01", "post-02", "post-04", "post-05"],
+                authors: ["Grace", "Grace", "Ada", "Grace"],
+              },
+              {
+                session: sessions.admin,
+                ids: fixtures.map((post) => post._id),
+                authors: ["Grace", "Grace", "Ada", "Ada", "Grace", "Ada"],
+              },
+            ];
+
+            for (const scenario of scenarios) {
+              const result = await executePosts(scenario.session);
+
+              assert.equal(result.errors, undefined);
+
+              const expectedEdges = scenario.ids.map((id, index) => ({
+                cursor: encodePostCursor(id),
+                node: {
+                  id,
+                  author: { name: scenario.authors[index] },
+                },
+              }));
+
+              assert.equal(
+                JSON.stringify(result.data),
+                JSON.stringify({
+                  posts: {
+                    edges: expectedEdges,
+                    pageInfo: {
+                      hasNextPage: false,
+                      endCursor: encodePostCursor(scenario.ids.at(-1)!),
+                    },
+                  },
+                }),
+              );
+            }
+          },
+        );
+
+        await t.test("preserves cursors across authorized pages", async () => {
+          const expectedPages = [
+            {
+              after: null,
+              ids: ["post-01", "post-03"],
+              hasNextPage: true,
+            },
+            {
+              after: encodePostCursor("post-03"),
+              ids: ["post-04", "post-06"],
+              hasNextPage: false,
+            },
+          ];
+
+          for (const page of expectedPages) {
+            const result = await executePosts(sessions.ada, 2, page.after);
+
+            assert.equal(result.errors, undefined);
+            assert.equal(
+              JSON.stringify(result.data),
+              JSON.stringify({
+                posts: {
+                  edges: page.ids.map((id) => ({
+                    cursor: encodePostCursor(id),
+                    node: {
+                      id,
+                      author: {
+                        name: id === "post-01" ? "Grace" : "Ada",
+                      },
+                    },
+                  })),
+                  pageInfo: {
+                    hasNextPage: page.hasNextPage,
+                    endCursor: encodePostCursor(page.ids.at(-1)!),
+                  },
+                },
+              }),
+            );
+          }
+        });
+
+        await t.test(
+          "does not fall back to anonymous posts when authentication fails",
+          async () => {
+            const unavailableClient = new MongoClient(url);
+            const unavailableDatabase = unavailableClient.db(databaseName);
+            await unavailableClient.close();
+
+            const result = await executePosts(
+              sessions.ada,
+              20,
+              null,
+              unavailableDatabase,
+            );
+
+            // posts IS NON-NULL, SO ITS ERROR PROPAGATES TO THE ROOT.
+            assert.equal(result.data, null);
+            assert.equal(result.errors?.length, 1);
+            assert.equal(
+              result.errors?.[0]?.extensions.code,
+              "SERVICE_UNAVAILABLE",
+            );
+            assert.equal(
+              result.errors?.[0]?.message,
+              "Authentication temporarily unavailable",
+            );
+            assert.deepEqual(result.errors?.[0]?.path, ["posts"]);
+          },
+        );
+      },
+    );
   } finally {
     try {
       // DELETE ONLY THE UNIQUE TEST DATABASE CREATED ABOVE.
