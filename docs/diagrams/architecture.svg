@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1100" viewBox="0 0 1440 1100" role="img" aria-labelledby="title desc">
+<title id="title">GraphQL Engineering Lab — current architecture</title>
+<desc id="desc">Local Docker Compose application. A browser or curl reaches one Express backend on port 4000. GraphQL creates request context and dispatches to paginated post queries with a request-scoped DataLoader or guarded login with scrypt and session issuance. Both use MongoDB. OpenTelemetry exports traces to Jaeger. k6, isolated integration tests and GitHub Actions support verification. Incoming session authentication and authorization enforcement are future work.</desc>
+<defs>
+  <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#43566e"/></marker>
+  <style>
+    text {font-family:Arial,Helvetica,sans-serif;fill:#19304a;font-size:17px}
+    .title {font-size:30px;font-weight:700}.heading{font-size:20px;font-weight:700}.small{font-size:15px}.label{font-size:16px;font-weight:700}.muted{fill:#52657b}
+    .boundary{fill:#f6f9fc;stroke:#92a6bc;stroke-width:2}.box{fill:white;stroke:#bdccda;stroke-width:1.5}.blue{fill:#eaf3ff;stroke:#618fc4;stroke-width:1.5}.green{fill:#edf7f1;stroke:#73a589;stroke-width:1.5}.orange{fill:#fff5e8;stroke:#c79952;stroke-width:1.5}.line{fill:none;stroke:#43566e;stroke-width:2;marker-end:url(#arrow)}.trace{fill:none;stroke:#43566e;stroke-width:2;stroke-dasharray:6 5;marker-end:url(#arrow)}
+  </style>
+</defs>
+<rect width="1440" height="1100" fill="white"/>
+<text x="40" y="48" class="title">GraphQL Engineering Lab</text>
+<text x="40" y="79" class="muted">Current implementation • 17 October 2026 • Local development blueprint</text>
+<rect x="300" y="112" width="1100" height="718" rx="12" class="boundary"/>
+<text x="320" y="143" class="heading">Docker Compose network</text>
+<rect x="325" y="170" width="610" height="475" rx="9" class="box"/>
+<text x="345" y="202" class="heading">backend · one Node.js process · Express + TypeScript</text>
+<rect x="350" y="220" width="560" height="72" rx="7" class="blue"/>
+<text x="370" y="247" class="label">1  HTTP entry + request logging</text>
+<text x="370" y="274">/graphql · /playground · /health · /learning-check</text>
+<path d="M630 292 V315" class="line"/>
+<rect x="350" y="320" width="560" height="72" rx="7" class="blue"/>
+<text x="370" y="347" class="label">2  graphql-http → schema → rootValue resolvers</text>
+<text x="370" y="374" class="small">Per-request context: IDs, DB, userLoader, login guard, cookie callback</text>
+<path d="M480 392 V423" class="line"/><path d="M770 392 V423" class="line"/>
+<rect x="350" y="430" width="250" height="190" rx="7" class="blue"/>
+<text x="368" y="459" class="label">3A  posts query</text>
+<text x="368" y="490">Validate first + cursor</text>
+<text x="368" y="518">Sorted page; fetch first + 1</text>
+<text x="368" y="546">author → userLoader.load()</text>
+<text x="368" y="574">Batch unique IDs with $in</text>
+<text x="368" y="602" class="small">Cache lasts one request</text>
+<rect x="625" y="430" width="285" height="190" rx="7" class="orange"/>
+<text x="643" y="459" class="label">3B  login mutation</text>
+<text x="643" y="490">Origin/header + attempt guards</text>
+<text x="643" y="518">Verify password: async scrypt</text>
+<text x="643" y="546">Max 2 checks per process</text>
+<text x="643" y="574">Store session token hash</text>
+<text x="643" y="602">HttpOnly cookie + public identity</text>
+<rect x="40" y="220" width="220" height="150" rx="9" class="box"/>
+<text x="58" y="252" class="heading">Browser / curl</text>
+<text x="58" y="283">Ruru query editor</text>
+<text x="58" y="311">Queries + mutations</text>
+<text x="58" y="340" class="small">Browser stores session cookie</text>
+<path d="M260 253 H345" class="line"/>
+<text x="42" y="190" class="label">localhost:4000</text>
+<text x="42" y="403" class="small muted">Response: GraphQL data/errors</text>
+<text x="42" y="427" class="small muted">Login also sends Set-Cookie</text>
+<rect x="1000" y="220" width="365" height="355" rx="9" class="green"/>
+<text x="1020" y="253" class="heading">mongo · MongoDB</text>
+<text x="1020" y="280" class="small">mongo:27017 · no host port published</text>
+<text x="1020" y="315" class="label">graphql_engineering_lab</text>
+<text x="1020" y="345">users · posts · learning_checks</text>
+<text x="1020" y="374">accounts: private password records</text>
+<text x="1020" y="403">sessions: hash + accountId + expiry</text>
+<path d="M1020 422 H1345" stroke="#bdccda"/>
+<text x="1020" y="451" class="small">Indexes: _id; posts(authorId, _id);</text>
+<text x="1020" y="475" class="small">unique account username; session TTL</text>
+<text x="1020" y="513" class="label">mongo-data → /data/db</text>
+<text x="1020" y="542" class="small">Persistent named volume</text>
+<path d="M910 510 H995" class="line"/>
+<path d="M475 620 V677 H970 V350 H995" class="line"/>
+<text x="495" y="669" class="small">Post page + batched author query</text>
+<rect x="1000" y="650" width="365" height="143" rx="9" class="box"/>
+<text x="1020" y="681" class="heading">jaeger · trace inspection</text>
+<text x="1020" y="709">OTLP traces: jaeger:4318</text>
+<text x="1020" y="737">UI: localhost:16686</text>
+<text x="1020" y="766" class="small">HTTP, Express, MongoDB + custom spans</text>
+<path d="M925 240 H950 V725 H995" class="trace"/>
+<text x="340" y="727" class="label">OpenTelemetry + JSON logs</text>
+<text x="340" y="754">requestId / traceId connect logs to traces</text>
+<text x="340" y="785" class="small">Backend source bind mount + dependency volume at /app/node_modules</text>
+<rect x="40" y="865" width="660" height="93" rx="8" class="box"/>
+<text x="58" y="894" class="label">Verification tools</text>
+<text x="58" y="922">k6 → backend · integration-tests → isolated test-mongo (tmpfs)</text>
+<text x="58" y="945" class="small">GitHub Actions: format check, typecheck, unit tests, integration tests</text>
+<rect x="725" y="865" width="675" height="93" rx="8" fill="#fafafa" stroke="#92a6bc" stroke-width="1.5" stroke-dasharray="7 5"/>
+<text x="743" y="894" class="label">Future work — outside the current request path</text>
+<text x="743" y="922">Cookie → actor · me / logout · authorization enforcement</text>
+<text x="743" y="945" class="small">Depth / complexity protection · schema evolution · federation exercise</text>
+<text x="40" y="1001" class="label">Read path: client → Express → GraphQL → posts → DataLoader → MongoDB</text>
+<text x="40" y="1033" class="label">Login path: client → guards → credentials → session storage → cookie</text>
+<text x="40" y="1072" class="small muted">Solid arrows: application/database calls. Dashed arrow: telemetry export. Inner backend boxes are modules, not separate services.</text>
+</svg>
+

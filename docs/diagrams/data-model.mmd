@@ -1,0 +1,27 @@
+erDiagram
+    USERS ||--o{ POSTS : authors
+    USERS ||--o| ACCOUNTS : provisioned_as
+    ACCOUNTS ||--o{ SESSIONS : has
+    USERS {
+        string _id PK
+        string name
+    }
+    POSTS {
+        string _id PK
+        string authorId FK
+        string title
+        string status
+    }
+    ACCOUNTS {
+        string _id PK
+        string username
+        string role
+        object password
+    }
+    SESSIONS {
+        string _id PK
+        string accountId FK
+        date createdAt
+        date expiresAt
+    }
+

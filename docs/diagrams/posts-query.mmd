@@ -1,0 +1,22 @@
+sequenceDiagram
+    participant C as Client
+    participant E as Express and GraphQL
+    participant R as Posts resolver
+    participant L as Request user loader
+    participant M as MongoDB
+    C->>E: posts with first, after and author selection
+    E->>E: Create request context and fresh loader
+    E->>R: Resolve posts
+    R->>R: Validate page size and decode cursor
+    R->>M: Find by cursor, sort by _id, limit first + 1
+    M-->>R: Bounded page documents
+    R-->>E: Edges, pageInfo and author resolver functions
+    E->>L: Load author IDs for returned posts
+    L->>L: Deduplicate queued IDs
+    L->>M: Find users with _id in requested IDs
+    M-->>L: Matching users
+    L->>L: Reorder to input keys, missing users become null
+    L-->>E: Author values
+    E-->>C: GraphQL data and any field errors
+
+

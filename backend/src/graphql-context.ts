@@ -11,4 +11,5 @@ export interface GraphQLContext {
   verifyCredentials: Awaited<ReturnType<typeof createCredentialVerifier>>;
   assertAuthRequest: () => void;
   setSessionCookie: (session: CreatedSession) => void;
+  beginLogin: () => void;
 }

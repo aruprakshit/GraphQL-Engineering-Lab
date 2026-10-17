@@ -11,6 +11,8 @@ import { createCredentialVerifier } from "./auth/credentials.js";
 import { setSessionCookie } from "./auth/cookies.js";
 import type { CreatedSession } from "./auth/models.js";
 import { createAuthRequestGuard } from "./auth/request-guard.js";
+import { createLoginRateLimiter } from "./auth/login-rate-limit.js";
+import { createLoginAttemptGuard } from "./auth/login-attempt.js";
 
 interface LearningCheck {
   _id: string;
@@ -32,6 +34,7 @@ if (!allowedAuthOrigin) {
 }
 
 const assertAuthRequest = createAuthRequestGuard(allowedAuthOrigin);
+const loginRateLimiter = createLoginRateLimiter();
 
 // 2. REGISTER THE HEALTH ROUTE
 app.get("/health", (_req, res) => {
@@ -75,6 +78,17 @@ app.get("/learning-check", async (_req, res) => {
 app.all("/graphql", (req, res, next) => {
   const requestId = res.locals.requestId as string;
   const traceId = res.locals.traceId as string | undefined;
+  const beginLogin = createLoginAttemptGuard({
+    assertAuthRequest: () => {
+      assertAuthRequest({
+        method: req.method,
+        origin: req.get("Origin"),
+        authHeader: req.get("X-GraphQL-Auth"),
+      });
+    },
+    rateLimiter: loginRateLimiter,
+    clientIp: req.ip,
+  });
 
   const handler = createHandler({
     schema,
@@ -102,6 +116,8 @@ app.all("/graphql", (req, res, next) => {
         logDatabaseCall,
         userLoader: createUserLoader(database, logDatabaseCall, requestId),
         verifyCredentials,
+        rateLimiter: options.rateLimiter ?? createLoginRateLimiter(),
+        beginLogin,
         setSessionCookie: (session: CreatedSession): void => {
           setSessionCookie(res, session, secureCookies);
         },

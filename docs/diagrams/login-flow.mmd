@@ -1,0 +1,24 @@
+sequenceDiagram
+    participant C as Browser
+    participant R as Login resolver
+    participant G as Login guards
+    participant V as Credential verifier
+    participant W as libuv worker pool
+    participant M as MongoDB
+    C->>R: POST login with variables and X-GraphQL-Auth header
+    R->>G: Validate method, supplied Origin and custom header
+    G->>G: Count IP attempt, enforce one login per request
+    R->>V: Verify supplied credentials
+    V->>V: Validate input and reserve shared capacity
+    V->>M: Find account by normalized username
+    M-->>V: Account or no match
+    V->>W: Async scrypt with stored or dummy password record
+    W-->>V: Derived hash for comparison
+    V->>M: Load public user for valid credentials
+    M-->>V: Public identity
+    V-->>R: Identity, release verification capacity
+    R->>M: Recheck account/user and insert hashed session token
+    M-->>R: Session stored
+    R-->>C: Public identity and HttpOnly session cookie
+
+

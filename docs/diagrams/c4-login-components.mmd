@@ -1,0 +1,24 @@
+flowchart TB
+    client["Browser / API client<br/>[External to backend]"]
+    subgraph backend["Backend API container - login components"]
+        execution["HTTP and GraphQL execution<br/>[Component: Express and graphql-http]<br/>Builds request context and dispatches mutation"]
+        login["Login resolver<br/>[Component: TypeScript]<br/>Coordinates guards, verification and session issuance<br/>Maps failures to GraphQL errors"]
+        guards["Login request protections<br/>[Component: TypeScript]<br/>POST, Origin and custom header<br/>IP attempt limit and one login per request"]
+        verifier["Credential verifier<br/>[Component: TypeScript and node:crypto]<br/>Checks normalized username and scrypt password<br/>Shares a two-check concurrency limit"]
+        sessions["Session service<br/>[Component: TypeScript]<br/>Rechecks account and creates expiring session<br/>Stores token hash instead of raw token"]
+        cookie["Cookie response adapter<br/>[Component: Express response helper]<br/>Sets HttpOnly session cookie and no-store"]
+        execution -->|Calls mutation with context| login
+        login -->|Checks before credential work| guards
+        login -->|Requests verified identity| verifier
+        login -->|Creates session after verification| sessions
+        login -->|Passes created session| cookie
+    end
+    db[("Application database<br/>[Container: MongoDB]")]
+    client -->|HTTP POST login| execution
+    verifier -->|Reads private account and public user| db
+    sessions -->|Reads account/user and inserts session| db
+    cookie -->|Sets response cookie for browser| client
+    classDef component fill:#85bbf0,color:#102a43,stroke:#3777b5
+    classDef external fill:#666,color:#fff,stroke:#444
+    class execution,login,guards,verifier,sessions,cookie component
+    class client,db external
