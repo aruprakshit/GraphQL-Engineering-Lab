@@ -1,4 +1,7 @@
 import type { Db, Filter } from "mongodb";
+import { randomUUID } from "node:crypto";
+import { PostAuthenticationRequiredError } from "./errors.js";
+import { normalizePostTitle } from "./titles.js";
 import type { Actor } from "../auth/models.js";
 import type { PostDocument } from "../models.js";
 import { buildPostVisibilityFilter } from "./visibility.js";
@@ -11,6 +14,10 @@ export interface ListPostsOptions {
 export interface VisiblePostsPage {
   posts: PostDocument[];
   hasNextPage: boolean;
+}
+
+export interface CreateDraftInput {
+  title: string;
 }
 
 export async function listVisiblePosts(
@@ -57,4 +64,29 @@ export async function listVisiblePosts(
     posts: documents.slice(0, pageSize),
     hasNextPage: documents.length > pageSize,
   };
+}
+
+export async function createDraft(
+  database: Db,
+  actor: Actor | null,
+  input: CreateDraftInput,
+): Promise<PostDocument> {
+  // REQUIRE TRUSTED IDENTITY BEFORE PROCESSING THE CONTENT.
+  if (!actor) {
+    throw new PostAuthenticationRequiredError();
+  }
+
+  const title = normalizePostTitle(input.title);
+
+  // CONSTRUCT THE DOCUMENT EXPLICITLY FROM TRUSTED VALUES.
+  const post: PostDocument = {
+    _id: randomUUID(),
+    title,
+    authorId: actor.userId,
+    status: "draft",
+  };
+
+  await database.collection<PostDocument>("posts").insertOne(post);
+
+  return post;
 }
