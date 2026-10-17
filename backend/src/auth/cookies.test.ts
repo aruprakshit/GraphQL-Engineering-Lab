@@ -13,7 +13,7 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";
 import express from "express";
-import { setSessionCookie } from "./cookies.js";
+import { setSessionCookie, clearSessionCookie } from "./cookies.js";
 
 test("session cookie settings", async (t) => {
   // 1. ARRANGE: USE A SYNTHETIC SESSION AND TEMPORARY SERVER
@@ -23,6 +23,16 @@ test("session cookie settings", async (t) => {
   };
 
   const app = express();
+
+  app.get("/clear/development", (_req, res) => {
+    clearSessionCookie(res, false);
+    res.json({ ok: true });
+  });
+
+  app.get("/clear/production", (_req, res) => {
+    clearSessionCookie(res, true);
+    res.json({ ok: true });
+  });
 
   app.get("/development", (_req, res) => {
     setSessionCookie(res, session, false);
@@ -81,6 +91,35 @@ test("session cookie settings", async (t) => {
       assert.equal(response.headers.get("cache-control"), "no-store");
 
       // THE TOKEN BELONGS IN THE COOKIE, NOT THE JSON BODY
+      assert.deepEqual(await response.json(), { ok: true });
+    });
+  }
+
+  for (const environment of ["development", "production"]) {
+    await t.test(`${environment} clears the session cookie`, async () => {
+      const response = await fetch(`${baseUrl}/clear/${environment}`);
+      const cookie = response.headers.get("set-cookie");
+
+      assert.equal(response.status, 200);
+      assert.ok(cookie);
+      assert.ok(cookie.startsWith("session=;"));
+
+      assert.match(cookie, /;\s*Path=\/(?:;|$)/i);
+      assert.match(cookie, /;\s*HttpOnly(?:;|$)/i);
+      assert.match(cookie, /;\s*SameSite=Lax(?:;|$)/i);
+      assert.doesNotMatch(cookie, /;\s*Domain=/i);
+
+      const hasSecure = /;\s*Secure(?:;|$)/i.test(cookie);
+      assert.equal(hasSecure, environment === "production");
+
+      const expiry = /;\s*Expires=([^;]+)/i.exec(cookie);
+      assert.ok(expiry);
+
+      const expiryValue = expiry[1];
+      assert.ok(expiryValue);
+      assert.ok(Date.parse(expiryValue) < Date.now());
+
+      assert.equal(response.headers.get("cache-control"), "no-store");
       assert.deepEqual(await response.json(), { ok: true });
     });
   }

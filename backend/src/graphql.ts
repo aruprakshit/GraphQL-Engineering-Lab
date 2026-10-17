@@ -54,6 +54,7 @@ export const schema = buildSchema(/* GraphQL */ `
 
   type Mutation {
     login(input: LoginInput!): LoginPayload
+    logout: Boolean
   }
 
   type Query {

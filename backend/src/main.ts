@@ -8,7 +8,7 @@ import { ruruHTML } from "ruru/server";
 import { serveStatic } from "ruru/static";
 import { requestLogging } from "./request-logging.js";
 import { createCredentialVerifier } from "./auth/credentials.js";
-import { setSessionCookie } from "./auth/cookies.js";
+import { setSessionCookie, clearSessionCookie } from "./auth/cookies.js";
 import type { CreatedSession } from "./auth/models.js";
 import { createAuthRequestGuard } from "./auth/request-guard.js";
 import { createLoginRateLimiter } from "./auth/login-rate-limit.js";
@@ -138,6 +138,10 @@ app.all("/graphql", (req, res, next) => {
             origin: req.get("Origin"),
             authHeader: req.get("X-GraphQL-Auth"),
           });
+        },
+        sessionToken,
+        clearSessionCookie: (): void => {
+          clearSessionCookie(res, secureCookies);
         },
       };
     },

@@ -17,3 +17,14 @@ export function setSessionCookie(
 
   response.setHeader("Cache-Control", "no-store");
 }
+
+export function clearSessionCookie(response: Response, secure: boolean): void {
+  response.clearCookie("session", {
+    httpOnly: true,
+    secure,
+    sameSite: "lax",
+    path: "/",
+  });
+
+  response.setHeader("Cache-Control", "no-store");
+}

@@ -127,6 +127,10 @@ test("GraphQL login", async (t) => {
           issuedSessions.push(session);
         },
         getActor: async () => null,
+        sessionToken: null,
+        clearSessionCookie: () => {
+          throw new Error("Login must not clear the session cookie");
+        },
       };
 
       const result = await graphql({

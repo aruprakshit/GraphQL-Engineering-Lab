@@ -13,4 +13,6 @@ export interface GraphQLContext {
   setSessionCookie: (session: CreatedSession) => void;
   beginLogin: () => void;
   getActor: () => Promise<Actor | null>;
+  sessionToken: string | null;
+  clearSessionCookie: () => void;
 }

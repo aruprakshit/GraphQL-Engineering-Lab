@@ -102,6 +102,10 @@ test("GraphQL current user", async (t) => {
         beginLogin: unexpectedLoginCall,
         assertAuthRequest: unexpectedLoginCall,
         setSessionCookie: unexpectedLoginCall,
+        sessionToken: null,
+        clearSessionCookie: () => {
+          throw new Error("Login must not clear the session cookie");
+        },
       };
 
       return graphql({
