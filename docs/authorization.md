@@ -1,10 +1,14 @@
 # Authorization design
 
-Session authentication and post-list visibility are implemented. The `posts`
-query now delegates to a service that applies authorization before pagination.
-Service and GraphQL integration tests have passed for this checkpoint.
+Session authentication, post-list visibility, and authenticated draft creation
+are implemented. Post services enforce list visibility before pagination and
+assign draft ownership and initial status from trusted server-side values.
 
-Single-post lookup, draft creation, editing, and publication remain planned.
+Post-list service and GraphQL integration tests have passed. Draft-creation unit,
+service, and GraphQL test coverage has been added; run the checks below before
+merging. The draft mutation has been manually verified in the playground.
+
+Single-post lookup, editing, and publication remain planned.
 The permission matrix describes the complete intended policy; the status table
 below distinguishes implemented behavior from future work.
 
@@ -19,7 +23,8 @@ below distinguishes implemented behavior from future work.
 | Visibility filtering before cursor pagination | Implemented and tested |
 | Authentication-storage failure without anonymous fallback | Implemented and tested |
 | Single-post lookup | Planned |
-| Draft creation, editing, and publication | Planned |
+| Draft creation with trusted ownership and initial status | Implemented; automated coverage added |
+| Editing and publication | Planned |
 
 See [session authentication](authentication/README.md) for the identity lifecycle.
 
@@ -73,7 +78,10 @@ flowchart TD
     B --> D[("MongoDB")]
 ```
 
-The current post-list service enforces read visibility. Future write services will also enforce object authorization and business rules.
+The post-list service enforces read visibility. The draft-creation service requires
+an authenticated actor, validates the title, and assigns ownership and draft status.
+Future editing and publication services will enforce their own object authorization
+and business rules.
 GraphQL resolvers obtain a trusted actor from request context and
 pass it to those services.
 
@@ -109,33 +117,170 @@ Drafts are readable only by their author or an admin.
 The client-visible response for an inaccessible private post will
 be chosen during implementation to avoid exposing its existence.
 
-## Creating a draft (planned)
+## Creating a draft (implemented)
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant G as GraphQL resolver
+    participant A as Session authentication
     participant S as Post service
     participant D as MongoDB
 
-    C->>G: Create draft with content
-    G->>S: Content and trusted actor
-
+    C->>G: POST createDraft with title and auth header
+    G->>G: Check method, custom header, and supplied Origin
+    G->>A: context.getActor()
+    A-->>G: Trusted actor or null
+    G->>S: createDraft with actor and title
     alt No authenticated actor
         S-->>G: Authentication required
-        G-->>C: Error
+        G-->>C: UNAUTHENTICATED and null createDraft
     else Authenticated actor
-        S->>S: Set authorId from actor.userId
-        S->>S: Set status to draft
-        S->>D: Insert draft
-        D-->>S: Stored post
-        S-->>G: Created draft
-        G-->>C: Result
+        S->>S: Trim and validate title
+        S->>S: Generate UUID, assign actor as author, set draft status
+        S->>D: Insert explicitly constructed post document
+        D-->>S: Insert acknowledged
+        S-->>G: Stored post
+        G->>G: Map public fields and resolve requested author through DataLoader
+        G-->>C: Post ID, normalized title, and requested author fields
     end
 ```
 
-Both ordinary users and admins create drafts under their own identity.
-Assigning a draft to another author is outside the initial scope.
+### GraphQL contract
+
+```graphql
+input CreateDraftInput {
+  title: String!
+}
+
+extend type Mutation {
+  createDraft(input: CreateDraftInput!): Post
+}
+```
+
+The field is nullable so creation failures can return `createDraft: null` with an
+error path. The existing `Post` output exposes `id`, `title`, and `author`; stored
+status is not currently a public Post field.
+
+```graphql
+mutation CreateDraft($input: CreateDraftInput!) {
+  createDraft(input: $input) {
+    id
+    title
+    author {
+      id
+      name
+    }
+  }
+}
+```
+
+Example variables:
+
+```json
+{
+  "input": {
+    "title": "  My first private draft  "
+  }
+}
+```
+
+Use the session cookie from login and the header `X-GraphQL-Auth: 1`. The existing
+request guard requires POST and rejects a supplied Origin that does not exactly
+match the configured application origin. It runs before session lookup or writes.
+
+### Title policy
+
+| Rule | Behavior |
+| --- | --- |
+| Input type | String; service validation rejects non-string values |
+| Leading and trailing whitespace | Trim before validation and storage |
+| Empty or whitespace-only value | Reject |
+| Length after trimming | 1-200 Unicode code points |
+| Internal whitespace | Preserve |
+
+The validator uses `Array.from(title).length`, rather than JavaScript string length,
+to count Unicode code points. A displayed symbol can contain multiple code points;
+this is not a grapheme-count limit. Password whitespace rules are separate and
+remain unchanged.
+
+### Service contract and ownership
+
+```typescript
+createDraft(database, actor, { title })
+// Promise<PostDocument>
+```
+
+The service accepts a trusted `Actor | null`. It requires authentication before
+title validation, generates a UUID with `randomUUID()`, assigns
+`authorId: actor.userId`, and sets `status: "draft"`.
+
+Both ordinary users and admins create drafts under their own identity. The service
+constructs the document explicitly instead of spreading input. Extra runtime input
+properties cannot override the ID, author, or status. At the GraphQL boundary,
+unknown input fields are rejected before resolver execution.
+
+The service has no GraphQL, Express, or cookie dependency. Another entry point must
+establish identity explicitly before passing an actor. Anonymous callers cannot
+bypass authentication by calling the service directly.
+
+New drafts immediately follow the existing visibility policy: the author and
+admins can list them; anonymous visitors and other ordinary users cannot. IDs are
+UUID strings, so existing `_id` ordering is lexicographic, not creation-time order.
+
+### Error behavior
+
+| Failure | GraphQL behavior | Write behavior |
+| --- | --- | --- |
+| Request guard rejects method, header, or Origin | FORBIDDEN | No session lookup or insert |
+| No valid authenticated actor | UNAUTHENTICATED | No insert |
+| Title fails service validation | BAD_USER_INPUT | No insert |
+| Input includes unknown fields such as authorId, status, or id | GraphQL input rejection before execution | No insert |
+| Session lookup fails | SERVICE_UNAVAILABLE; existing authentication error preserved | No insert attempted |
+| Post storage fails | SERVICE_UNAVAILABLE; generic draft-creation message | No successful creation claimed |
+
+Database errors propagate from the service and are sanitized at the resolver
+boundary. The actor lookup remains outside the creation error handler so its
+existing authentication-failure contract is preserved.
+
+An author field is resolved after the insert through the shared DataLoader. A later
+field-resolution failure does not roll back the inserted draft. Likewise, a network
+or acknowledgement failure does not guarantee that a write was never committed;
+automatic retries are not an idempotency guarantee for this mutation.
+
+### Implementation and coverage
+
+Paths are relative to `backend/`.
+
+| File | Responsibility |
+| --- | --- |
+| `src/posts/errors.ts` | Transport-independent authentication and title errors |
+| `src/posts/titles.ts` | Title normalization and validation |
+| `src/posts/titles.test.ts` | Whitespace, type checks, and Unicode length boundaries |
+| `src/posts/service.ts` | Require actor, generate ID, assign ownership/status, insert draft |
+| `src/resolvers/create-draft.ts` | Request guard, actor lookup, service call, error mapping |
+| `src/resolvers/post.ts` | Shared public post mapping and DataLoader author resolution |
+| `src/graphql.ts` and `src/resolvers/index.ts` | Mutation schema and resolver registration |
+| `tests/integration/create-draft.test.ts` | Direct service and GraphQL mutation coverage |
+
+Automated scenarios cover:
+
+- Ordinary users and admins owning their newly created drafts.
+- Stored normalized titles, generated IDs, and draft status.
+- Different IDs for separate creations, including repeated titles.
+- Ignored ownership/status/ID overrides from non-GraphQL callers.
+- Anonymous and invalid-title rejection without insertion.
+- Invalid headers and disallowed origins preventing creation.
+- GraphQL input rejecting caller-selected ownership, status, or ID.
+- Correct author fields through the request DataLoader.
+- Created draft visibility for authors/admins and exclusion for other callers.
+- Authentication failure and closed-client write failure without insertion in
+  those controlled test scenarios.
+
+Service tests use trusted actors directly. GraphQL tests use the real schema,
+registered resolvers, cookie extraction, session lookup, and DataLoader with an
+isolated MongoDB database. These tests do not exercise the full Express route.
+The manual playground check verifies the browser mutation flow.
 
 ## Editing a post (planned)
 
@@ -284,8 +429,9 @@ Paths are relative to `backend/`.
 | File | Responsibility |
 | --- | --- |
 | `src/posts/visibility.ts` | Build actor-dependent visibility filters |
-| `src/posts/service.ts` | Validate service bounds, apply visibility and cursor, sort, fetch, trim |
-| `src/resolvers/posts.ts` | Validate GraphQL arguments, get actor, call service, map connection, resolve authors, trace |
+| `src/posts/service.ts` | Validate bounds and return visible pages; also create authenticated drafts |
+| src/resolvers/posts.ts | Validate GraphQL arguments, get actor, call service, map connection, trace |
+| src/resolvers/post.ts | Shared post mapping and DataLoader author resolution |
 | `src/auth/request-actor.ts` | Lazy identity lookup shared within one request |
 | `tests/integration/post-visibility.test.ts` | Direct-service and GraphQL authorization/pagination coverage |
 
@@ -334,15 +480,13 @@ merging; a local verification result does not itself confirm CI success.
 
 ## Planned authorization scenarios
 
-These define subsequent work, not implemented write or single-post endpoints.
+These define subsequent single-post, editing, and publication work.
 
 | Scenario | Expected |
 | --- | --- |
 | Anonymous visitor requests a published post by ID | Allowed |
 | Anonymous visitor or non-author requests a draft by ID | Inaccessible; response contract to be defined |
 | Author or admin requests a draft by ID | Allowed |
-| Anonymous visitor creates a draft | Denied |
-| Ada creates a draft | Allowed; author is Ada |
 | Ada edits Grace's post | Denied |
 | Grace edits her own post | Allowed |
 | Admin edits Grace's post | Allowed |
@@ -351,3 +495,4 @@ These define subsequent work, not implemented write or single-post endpoints.
 | Admin publishes Grace's draft | Allowed |
 | Author or admin publishes an already published post | Rejected by business rule |
 | Future entry point invokes a post service | Same policy enforced using explicitly established identity |
+
