@@ -1,3 +1,16 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Valid credentials and normalized username | Returns only userId, name, and role |
+ * | Wrong password or unknown username | Returns null |
+ * | Invalid credential input | InvalidLoginInputError |
+ * | Role changes | Returns current role |
+ * | Missing public user | Returns null |
+ * | Verification alone | Creates no sessions |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";

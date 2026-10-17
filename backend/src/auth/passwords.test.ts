@@ -1,3 +1,16 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Correct password | Returns true |
+ * | Incorrect password | Returns false |
+ * | Password whitespace | Exact password succeeds; trimmed password fails |
+ * | Same password hashed twice | Fresh salts and hashes; both verify |
+ * | Malformed credentials or unsupported parameters | Returns false |
+ * | Tested password length limits | Hashing rejects; short-password verification returns false |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hashPassword, verifyPassword } from "./passwords.js";

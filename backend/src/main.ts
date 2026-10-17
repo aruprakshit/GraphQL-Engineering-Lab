@@ -13,6 +13,9 @@ import type { CreatedSession } from "./auth/models.js";
 import { createAuthRequestGuard } from "./auth/request-guard.js";
 import { createLoginRateLimiter } from "./auth/login-rate-limit.js";
 import { createLoginAttemptGuard } from "./auth/login-attempt.js";
+import { readSessionCookie } from "./auth/session-cookie.js";
+import { resolveSession } from "./auth/sessions.js";
+import { createRequestActor } from "./auth/request-actor.js";
 
 interface LearningCheck {
   _id: string;
@@ -76,8 +79,15 @@ app.get("/learning-check", async (_req, res) => {
 
 // HANDLE GRAPHQL HTTP REQUESTS
 app.all("/graphql", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
   const requestId = res.locals.requestId as string;
   const traceId = res.locals.traceId as string | undefined;
+
+  const sessionToken = readSessionCookie(req.get("Cookie"));
+  const getActor = createRequestActor(() =>
+    resolveSession(database, sessionToken),
+  );
+
   const beginLogin = createLoginAttemptGuard({
     assertAuthRequest: () => {
       assertAuthRequest({
@@ -118,6 +128,7 @@ app.all("/graphql", (req, res, next) => {
         verifyCredentials,
         rateLimiter: loginRateLimiter,
         beginLogin,
+        getActor,
         setSessionCookie: (session: CreatedSession): void => {
           setSessionCookie(res, session, secureCookies);
         },

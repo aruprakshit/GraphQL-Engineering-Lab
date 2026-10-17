@@ -1,3 +1,14 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Development response | HttpOnly, SameSite=Lax, Path=/ cookie without Secure |
+ * | Production response | Same attributes plus Secure |
+ * | Cookie lifetime and scope | Matches session expiry; no Domain attribute |
+ * | Response caching and body | no-store; JSON contains only ok: true |
+ */
+
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { test } from "node:test";

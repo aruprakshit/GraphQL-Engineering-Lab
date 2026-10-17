@@ -1,3 +1,18 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Valid credentials through GraphQL | Public identity; stored session passed to cookie callback; no token in data |
+ * | Wrong password or unknown username | Same UNAUTHENTICATED error; no session or cookie issued |
+ * | Short password | BAD_USER_INPUT; no session or cookie issued |
+ * | Missing custom header | FORBIDDEN; no session or cookie issued |
+ * | Two login aliases | First succeeds; second BAD_USER_INPUT; one session issued |
+ * | Requests sharing two-attempt IP allowance | Third request TOO_MANY_REQUESTS with retry delay |
+ * | Simulated verification capacity exhaustion | SERVICE_UNAVAILABLE with retry delay; no session or cookie issued |
+ * | Closed database during session creation | Generic SERVICE_UNAVAILABLE; no session or cookie issued |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -105,12 +120,13 @@ test("GraphQL login", async (t) => {
               authHeader,
             });
           },
-          rateLimiter: createLoginRateLimiter(),
+          rateLimiter: options.rateLimiter ?? createLoginRateLimiter(),
           clientIp: "test-client",
         }),
         setSessionCookie: (session) => {
           issuedSessions.push(session);
         },
+        getActor: async () => null,
       };
 
       const result = await graphql({

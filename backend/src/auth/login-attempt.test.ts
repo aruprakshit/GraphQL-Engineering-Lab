@@ -1,3 +1,14 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Second attempt in one request | LoginAlreadyAttemptedError |
+ * | Extra alias and later request share allowance | Alias counts; later request is rate limited |
+ * | Request guard rejects | Error propagates without consuming allowance |
+ * | Missing client IP | LoginClientUnavailableError |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

@@ -1,3 +1,17 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Key exceeds allowance | LoginRateLimitError |
+ * | Different key | Independent allowance |
+ * | Just before expiry | Rejected with one-second retry delay |
+ * | At expiry | New window accepts attempt |
+ * | Storage full with active entries | LoginRateLimitCapacityError for new key |
+ * | Expired entries at storage capacity | Reclaimed; new key accepted |
+ * | Invalid settings | Creation throws |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

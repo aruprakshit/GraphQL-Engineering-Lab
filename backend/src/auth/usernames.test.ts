@@ -1,3 +1,13 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Whitespace and capitalization | Trimmed lowercase username |
+ * | Supported characters and length boundaries | Accepted |
+ * | Invalid length or unsupported characters | Throws |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { normalizeUsername } from "./usernames.js";

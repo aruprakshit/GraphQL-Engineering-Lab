@@ -1,3 +1,15 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Valid session cookie | Returns token |
+ * | Unrelated cookies or surrounding whitespace | Returns session token |
+ * | Missing session or different name/case | Returns null |
+ * | Malformed, quoted, or encoded value | Returns null |
+ * | Duplicate session cookies | Returns null, even for identical tokens |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readSessionCookie } from "./session-cookie.js";

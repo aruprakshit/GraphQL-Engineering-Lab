@@ -1,3 +1,15 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Configured browser origin with POST and required header | Accepted |
+ * | CLI POST without Origin and with required header | Accepted |
+ * | GET or missing/incorrect header | AuthRequestRejectedError |
+ * | Lookalike host, wrong port, or null origin | AuthRequestRejectedError |
+ * | Invalid origin configuration | Creation throws |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {

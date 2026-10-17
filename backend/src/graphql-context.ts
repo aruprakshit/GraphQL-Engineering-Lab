@@ -1,7 +1,7 @@
 import type { Db } from "mongodb";
 import type { createUserLoader } from "./loaders.js";
 import type { createCredentialVerifier } from "./auth/credentials.js";
-import type { CreatedSession } from "./auth/models.js";
+import type { Actor, CreatedSession } from "./auth/models.js";
 
 export interface GraphQLContext {
   requestId: string;
@@ -12,4 +12,5 @@ export interface GraphQLContext {
   assertAuthRequest: () => void;
   setSessionCookie: (session: CreatedSession) => void;
   beginLogin: () => void;
+  getActor: () => Promise<Actor | null>;
 }

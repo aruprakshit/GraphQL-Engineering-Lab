@@ -1,3 +1,18 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Create and resolve session | Stores hash and timestamps; eight-hour expiry; resolves actor |
+ * | Unknown, malformed, or missing token | Returns null |
+ * | Just before expiry | Resolves actor |
+ * | Exact expiry while document exists | Returns null without waiting for TTL cleanup |
+ * | Repeated revocation | Succeeds; revoked session does not resolve |
+ * | Another session for same account | Distinct token; remains valid |
+ * | Role changes | Existing session resolves current role |
+ * | Missing user or account | Resolution returns null; creation rejects |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";

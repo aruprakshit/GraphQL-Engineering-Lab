@@ -1,3 +1,14 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Capacity exceeded | Rejects without starting excess work |
+ * | Work completes | Slot becomes available |
+ * | Asynchronous or synchronous failure | Error propagates; slot released |
+ * | Invalid limit | Creation throws |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
