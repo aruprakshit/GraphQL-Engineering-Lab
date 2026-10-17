@@ -36,18 +36,12 @@ test("counts Unicode code points rather than UTF-16 code units", () => {
 
 test("rejects empty, whitespace-only, and oversized titles", () => {
   for (const title of ["", " \t\n ", "a".repeat(201)]) {
-    assert.throws(
-      () => normalizePostTitle(title),
-      InvalidPostTitleError,
-    );
+    assert.throws(() => normalizePostTitle(title), InvalidPostTitleError);
   }
 });
 
 test("rejects non-string input without coercion", () => {
   for (const value of [undefined, null, 123, {}, ["A title"]]) {
-    assert.throws(
-      () => normalizePostTitle(value),
-      InvalidPostTitleError,
-    );
+    assert.throws(() => normalizePostTitle(value), InvalidPostTitleError);
   }
 });

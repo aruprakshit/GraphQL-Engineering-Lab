@@ -43,8 +43,8 @@ export const schema = buildSchema(/* GraphQL */ `
   }
 
   input CreateDraftInput {
-  title: String!
-}
+    title: String!
+  }
 
   type AuthUser {
     id: ID!
