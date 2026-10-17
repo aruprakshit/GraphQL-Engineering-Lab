@@ -116,7 +116,7 @@ app.all("/graphql", (req, res, next) => {
         logDatabaseCall,
         userLoader: createUserLoader(database, logDatabaseCall, requestId),
         verifyCredentials,
-        rateLimiter: options.rateLimiter ?? createLoginRateLimiter(),
+        rateLimiter: loginRateLimiter,
         beginLogin,
         setSessionCookie: (session: CreatedSession): void => {
           setSessionCookie(res, session, secureCookies);
