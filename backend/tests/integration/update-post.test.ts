@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { MongoClient } from "mongodb";
-import type { Actor } from "../../src/auth/models.js";
-import type { PostDocument } from "../../src/models.js";
 import { updatePostTitle } from "../../src/posts/service.js";
 import {
   InvalidPostIdError,
@@ -11,6 +9,22 @@ import {
   PostAuthenticationRequiredError,
   PostNotFoundError,
 } from "../../src/posts/errors.js";
+import { graphql } from "graphql";
+import { schema } from "../../src/graphql.js";
+import { rootValue } from "../../src/resolvers/index.js";
+import type { GraphQLContext } from "../../src/graphql-context.js";
+import type {
+  AccountDocument,
+  Actor,
+  CreatedSession,
+} from "../../src/auth/models.js";
+import type { PostDocument, UserDocument } from "../../src/models.js";
+import { hashPassword } from "../../src/auth/passwords.js";
+import { createSession, resolveSession } from "../../src/auth/sessions.js";
+import { readSessionCookie } from "../../src/auth/session-cookie.js";
+import { createRequestActor } from "../../src/auth/request-actor.js";
+import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
+import { createUserLoader } from "../../src/loaders.js";
 
 test("post title editing service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
@@ -59,7 +73,8 @@ test("post title editing service", async (t) => {
     },
   ];
 
-  const snapshot = () => posts.find({}).sort({ _id: 1 }).toArray();
+  const snapshot = (): Promise<PostDocument[]> =>
+    posts.find({}).sort({ _id: 1 }).toArray();
 
   try {
     await client.connect();
@@ -246,6 +261,305 @@ test("post title editing service", async (t) => {
         assert.deepEqual(await snapshot(), before);
       },
     );
+    await t.test("GraphQL post editing", async (t) => {
+      const password = await hashPassword("GraphQL editing fixture password!");
+
+      await database.collection<UserDocument>("users").insertMany([
+        { _id: "ada", name: "Ada" },
+        { _id: "grace", name: "Grace" },
+        { _id: "admin", name: "Admin" },
+      ]);
+
+      await database.collection<AccountDocument>("accounts").insertMany([
+        { _id: "ada", username: "ada", role: "user", password },
+        { _id: "admin", username: "admin", role: "admin", password },
+      ]);
+
+      const sessions = {
+        ada: await createSession(database, "ada"),
+        admin: await createSession(database, "admin"),
+      };
+
+      const mutation = `
+    mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
+      updatePost(id: $id, input: $input) {
+        id
+        title
+        author {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+      interface RequestOptions {
+        authHeader?: string;
+        origin?: string;
+        database?: GraphQLContext["database"];
+        authenticationDatabase?: GraphQLContext["database"];
+      }
+
+      async function executeUpdate(
+        session: CreatedSession | null,
+        id: string,
+        input: Record<string, unknown>,
+        options: RequestOptions = {},
+      ) {
+        const requestDatabase = options.database ?? database;
+        const authenticationDatabase =
+          options.authenticationDatabase ?? database;
+
+        const token = readSessionCookie(
+          session ? `session=${session.token}` : undefined,
+        );
+
+        const guard = createAuthRequestGuard("http://localhost:4000");
+
+        const unexpectedCall = (): never => {
+          throw new Error("Post editing invoked a login or cookie helper");
+        };
+
+        const context: GraphQLContext = {
+          requestId: randomUUID(),
+          database: requestDatabase,
+          logDatabaseCall: () => {},
+          userLoader: createUserLoader(
+            requestDatabase,
+            () => {},
+            "update-post-test",
+          ),
+          sessionToken: token,
+          getActor: createRequestActor(() =>
+            resolveSession(authenticationDatabase, token),
+          ),
+          assertAuthRequest: () => {
+            guard({
+              method: "POST",
+              origin: options.origin ?? "http://localhost:4000",
+              authHeader: options.authHeader ?? "1",
+            });
+          },
+          verifyCredentials: async () => unexpectedCall(),
+          beginLogin: unexpectedCall,
+          setSessionCookie: unexpectedCall,
+          clearSessionCookie: unexpectedCall,
+        };
+
+        return graphql({
+          schema,
+          rootValue,
+          source: mutation,
+          variableValues: { id, input },
+          contextValue: context,
+        });
+      }
+
+      await t.test(
+        "authors and admins edit draft and published titles",
+        async () => {
+          const scenarios = [
+            {
+              session: sessions.ada,
+              ids: ["ada-draft", "ada-published"],
+              authorId: "ada",
+              authorName: "Ada",
+            },
+            {
+              session: sessions.admin,
+              ids: ["grace-draft", "grace-published"],
+              authorId: "grace",
+              authorName: "Grace",
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            for (const id of scenario.ids) {
+              const before = await posts.findOne({ _id: id });
+              assert.ok(before);
+
+              const title = `Edited through GraphQL: ${id}`;
+
+              const result = await executeUpdate(scenario.session, id, {
+                title: `  ${title}  `,
+              });
+
+              assert.equal(result.errors, undefined);
+              assert.equal(
+                JSON.stringify(result.data),
+                JSON.stringify({
+                  updatePost: {
+                    id,
+                    title,
+                    author: {
+                      id: scenario.authorId,
+                      name: scenario.authorName,
+                    },
+                  },
+                }),
+              );
+
+              // OWNERSHIP AND STATUS MUST SURVIVE THE UPDATE.
+              assert.deepEqual(await posts.findOne({ _id: id }), {
+                ...before,
+                title,
+              });
+            }
+          }
+        },
+      );
+
+      await t.test("rejected edits leave all posts unchanged", async () => {
+        const scenarios = [
+          {
+            session: null,
+            id: "ada-draft",
+            title: "Anonymous edit",
+            options: {},
+            code: "UNAUTHENTICATED",
+          },
+          {
+            session: sessions.ada,
+            id: "grace-draft",
+            title: "Unauthorized draft edit",
+            options: {},
+            code: "NOT_FOUND",
+          },
+          {
+            session: sessions.ada,
+            id: "grace-published",
+            title: "Unauthorized published edit",
+            options: {},
+            code: "NOT_FOUND",
+          },
+          {
+            session: sessions.ada,
+            id: "missing-post",
+            title: "Missing post edit",
+            options: {},
+            code: "NOT_FOUND",
+          },
+          {
+            session: sessions.ada,
+            id: "ada-draft",
+            title: " \t\n ",
+            options: {},
+            code: "BAD_USER_INPUT",
+          },
+          {
+            session: sessions.ada,
+            id: "ada-draft",
+            title: "a".repeat(201),
+            options: {},
+            code: "BAD_USER_INPUT",
+          },
+          {
+            session: sessions.ada,
+            id: "",
+            title: "Valid title",
+            options: {},
+            code: "BAD_USER_INPUT",
+          },
+          {
+            session: sessions.ada,
+            id: "ada-draft",
+            title: "Missing header",
+            options: { authHeader: "" },
+            code: "FORBIDDEN",
+          },
+          {
+            session: sessions.ada,
+            id: "ada-draft",
+            title: "Untrusted origin",
+            options: { origin: "https://untrusted.example" },
+            code: "FORBIDDEN",
+          },
+        ];
+
+        for (const scenario of scenarios) {
+          const before = await snapshot();
+
+          const result = await executeUpdate(
+            scenario.session,
+            scenario.id,
+            { title: scenario.title },
+            scenario.options,
+          );
+
+          assert.equal(result.data?.updatePost, null);
+          assert.equal(result.errors?.length, 1);
+          assert.equal(result.errors?.[0]?.extensions.code, scenario.code);
+          assert.deepEqual(result.errors?.[0]?.path, ["updatePost"]);
+
+          if (scenario.code === "NOT_FOUND") {
+            assert.equal(result.errors?.[0]?.message, "Post not found");
+          }
+
+          assert.deepEqual(await snapshot(), before);
+        }
+      });
+
+      await t.test("GraphQL rejects protected input fields", async () => {
+        for (const extra of [
+          { authorId: "grace" },
+          { status: "published" },
+          { id: "replacement-id" },
+        ]) {
+          const before = await snapshot();
+
+          const result = await executeUpdate(sessions.ada, "ada-draft", {
+            title: "Attempted override",
+            ...extra,
+          });
+
+          assert.ok(result.errors?.length);
+          assert.equal(result.data, undefined);
+          assert.deepEqual(await snapshot(), before);
+        }
+      });
+
+      await t.test(
+        "authentication and update failures return generic errors",
+        async () => {
+          const unavailableClient = new MongoClient(url);
+          const unavailableDatabase = unavailableClient.db(
+            database.databaseName,
+          );
+          await unavailableClient.close();
+
+          const scenarios = [
+            {
+              options: { authenticationDatabase: unavailableDatabase },
+              message: "Authentication temporarily unavailable",
+            },
+            {
+              options: { database: unavailableDatabase },
+              message: "Post update temporarily unavailable",
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            const before = await snapshot();
+
+            const result = await executeUpdate(
+              sessions.ada,
+              "ada-draft",
+              { title: "Unavailable storage" },
+              scenario.options,
+            );
+
+            assert.equal(result.data?.updatePost, null);
+            assert.equal(result.errors?.length, 1);
+            assert.equal(
+              result.errors?.[0]?.extensions.code,
+              "SERVICE_UNAVAILABLE",
+            );
+            assert.equal(result.errors?.[0]?.message, scenario.message);
+            assert.deepEqual(await snapshot(), before);
+          }
+        },
+      );
+    });
   } finally {
     try {
       await database.dropDatabase();

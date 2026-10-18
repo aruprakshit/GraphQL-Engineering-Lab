@@ -5,6 +5,7 @@ import { resolveLogin } from "./login.js";
 import { resolveMe } from "./me.js";
 import { resolveLogout } from "./logout.js";
 import { resolveCreateDraft } from "./create-draft.js";
+import { resolveUpdatePost } from "./update-post.js";
 
 export const rootValue = {
   hello: resolveHello,
@@ -14,4 +15,5 @@ export const rootValue = {
   me: resolveMe,
   logout: resolveLogout,
   createDraft: resolveCreateDraft,
+  updatePost: resolveUpdatePost,
 };
