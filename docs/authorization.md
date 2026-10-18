@@ -1,16 +1,18 @@
 # Authorization design
 
-Session authentication, post-list visibility, draft creation, and authorized title
-editing are implemented. Post services enforce visibility before pagination,
-assign draft ownership and initial status, and restrict updates to authors or admins.
+Session authentication, post-list visibility, draft creation, title editing, and
+publication are implemented. Post services enforce visibility before pagination,
+assign trusted ownership, and restrict edits and publication to authors or admins.
+Publication also requires an atomic draft-to-published state transition.
 
-Post-list service and GraphQL integration tests have passed. Draft-creation unit,
-service, and GraphQL test coverage has been added; run the checks below before
-merging. The draft mutation has been manually verified in the playground.
+The earlier draft-creation and editing feature PRs have merged. Publication now
+has service and GraphQL integration coverage; run the verification commands below
+and confirm CI before merging this checkpoint. Adding test code does not by itself
+establish a passing run.
 
-Single-post lookup and publication remain planned. Editing has service and GraphQL integration coverage; run the checks below before merging issue #48.
-The permission matrix describes the complete intended policy; the status table
-below distinguishes implemented behavior from future work.
+Single-post lookup remains planned. The next agreed feature after publication is
+an optional post-status filter and a public Post.status enum field; neither is
+implemented yet.
 
 ## Implementation status
 
@@ -25,7 +27,8 @@ below distinguishes implemented behavior from future work.
 | Single-post lookup | Planned |
 | Draft creation with trusted ownership and initial status | Implemented; automated coverage added |
 | Author/admin title editing with ownership in the update filter | Implemented; automated coverage added |
-| Publication | Planned |
+| Author/admin publication with atomic draft-state condition | Implemented; automated coverage added |
+| Public post status and status-filtered lists | Planned next after publication |
 
 See [session authentication](authentication/README.md) for the identity lifecycle.
 
@@ -82,7 +85,7 @@ flowchart TD
 The post-list service enforces read visibility. The draft-creation service requires
 an authenticated actor, validates the title, and assigns ownership and draft status.
 The title-editing service includes ownership in the database update condition.
-The future publication service will enforce authorization and state-transition rules.
+The publication service enforces authorization and draft status in the same update.
 GraphQL resolvers obtain a trusted actor from request context and
 pass it to those services.
 
@@ -447,43 +450,195 @@ failure. Each rejected edit verifies that stored posts remain unchanged. The tes
 use an isolated MongoDB database and clean up only their owned fixtures/database;
 they do not exercise the full Express HTTP route.
 
-## Publishing a draft (planned)
+## Publishing a draft (implemented)
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant G as GraphQL resolver
+    participant A as Session authentication
     participant S as Post service
     participant D as MongoDB
 
-    C->>G: Publish post
-    G->>S: Post ID and trusted actor
-    S->>S: Require authenticated actor
-    S->>D: Load post
-    D-->>S: Post or no match
-
-    alt Post missing
-        S-->>G: Not found
-    else Actor is neither author nor admin
-        S-->>G: Access denied
-    else Post is already published
-        S-->>G: Invalid state transition
-    else Authorized actor and draft
-        S->>D: Conditionally update draft to published
-        D-->>S: Update result
-        S-->>G: Published post or state-change conflict
+    C->>G: POST publishPost with ID and auth header
+    G->>G: Check method, custom header, and supplied Origin
+    G->>A: context.getActor()
+    A-->>G: Trusted actor or null
+    G->>S: publishPost with actor and ID
+    S->>S: Require authentication and validate ID
+    S->>D: Update authorized draft to published atomically
+    alt Draft matched
+        D-->>S: Updated document
+        S-->>G: Published post
+        G-->>C: Public post fields with DataLoader author
+    else No draft matched
+        D-->>S: null
+        S->>D: Find by authorized ID without status condition
+        alt No accessible post
+            D-->>S: No match
+            S-->>G: PostNotFoundError
+            G-->>C: NOT_FOUND
+        else Accessible post exists
+            D-->>S: Authorized ID
+            S-->>G: PostPublicationConflictError
+            G-->>C: CONFLICT
+        end
     end
-
-    G-->>C: Result or error
 ```
 
-Authorization and state validation are separate checks.
-An admin can pass authorization and still fail the business rule.
+Request rejection, anonymous access, and invalid IDs stop before any publication
+write. The actor lookup remains outside the resolver's publication error handler,
+preserving authentication-storage errors without anonymous fallback.
 
-The write must enforce the expected state so concurrent requests
-cannot both claim the same successful publication transition.
-Implementation will also address authorization changes between
-reading and writing.
+### GraphQL contract
+
+```graphql
+extend type Mutation {
+  publishPost(id: ID!): Post
+}
+```
+
+```graphql
+mutation PublishPost($id: ID!) {
+  publishPost(id: $id) {
+    id
+    title
+    author {
+      id
+      name
+    }
+  }
+}
+```
+
+Example variables:
+
+```json
+{
+  "id": "replace-with-your-draft-id"
+}
+```
+
+Use a login session cookie and `X-GraphQL-Auth: 1`. The server controls the status
+transition; clients supply only the post ID. The field is nullable so execution
+failure can produce `publishPost: null` with its error path.
+
+`Post` currently exposes ID, title, and author, without a public status field.
+Publication can be checked through anonymous list visibility, persisted status,
+and a conflict on a repeated attempt. UUID sorting is lexicographic rather than
+chronological; a published post may require pagination to locate.
+
+### Service contract and atomic update
+
+```typescript
+publishPost(database, actor, id)
+// Promise<PostDocument>
+```
+
+The service requires a trusted authenticated actor and an ID that is a nonempty
+string of at most 256 characters. IDs are not trimmed. The authorization filter
+is combined with `{ status: "draft" }` using `$and` in `findOneAndUpdate`.
+
+| Actor | Required match |
+| --- | --- |
+| Anonymous | Rejected before database access |
+| Ordinary user | ID matches, authorId equals actor.userId, and status is draft |
+| Admin | ID matches and status is draft |
+
+The update changes only `{ $set: { status: "published" } }`. The post ID, title,
+and author remain unchanged. `returnDocument: "after"` and
+`includeResultMetadata: false` return the updated document or null.
+
+Authorization answers whether the actor may publish this post. The state rule
+answers whether it is still a draft. An admin passes the ownership restriction
+but must still satisfy the state rule.
+
+If the update returns null, a second lookup uses the same authorization filter
+without a status condition. No match produces `PostNotFoundError`; an accessible
+post produces `PostPublicationConflictError`. This lookup classifies a failed
+update and never authorizes a later write. It also preserves the same not-found
+response for nonexistent and inaccessible IDs.
+
+### Concurrent attempts and repeated publication
+
+```mermaid
+sequenceDiagram
+    participant A as Author request
+    participant D as MongoDB
+    participant B as Admin request
+
+    A->>D: Publish if authorized and draft
+    B->>D: Publish if authorized and draft
+    D-->>A: One possible winner changes draft to published
+    D-->>B: Draft condition no longer matches
+    B->>D: Authorized follow-up lookup
+    D-->>B: Accessible published post exists
+    Note over B: Return CONFLICT
+```
+
+Either caller may win. For an unchanged accessible post, exactly one of two
+concurrent attempts succeeds and the other conflicts. The same state rule makes
+repeated publication a conflict, including for admins. Publication is deliberately
+not idempotent-success behavior like logout.
+
+The authorized follow-up lookup observes a later database state. If a future
+feature permits deletion or ownership transfer between operations, failure may be
+classified as NOT_FOUND instead of CONFLICT. The atomic write condition still
+prevents an unauthorized or repeated transition. Account roles are resolved for
+the request, not transactionally locked against future role changes.
+
+### Error behavior
+
+| Failure | GraphQL code | Public message |
+| --- | --- | --- |
+| Request guard rejected | FORBIDDEN | Authentication request rejected |
+| Anonymous actor | UNAUTHENTICATED | Authentication required |
+| Invalid ID | BAD_USER_INPUT | Post ID must contain between 1 and 256 characters |
+| Missing or inaccessible post | NOT_FOUND | Post not found |
+| Authorized caller cannot transition an accessible post from draft | CONFLICT | Post is no longer a draft |
+| Authentication storage fails | SERVICE_UNAVAILABLE | Authentication temporarily unavailable |
+| Publication storage or follow-up lookup fails | SERVICE_UNAVAILABLE | Post publication temporarily unavailable |
+
+A non-author receives NOT_FOUND for both draft and published posts; the conflict
+response does not expose state to that caller. Database errors propagate from the
+service and are sanitized by the resolver.
+
+A network or acknowledgement failure can leave the write outcome uncertain.
+Likewise, failure resolving the author field after publication does not roll back
+the completed state transition. A retry must not be assumed to be the first attempt.
+
+### Implementation and test coverage
+
+Paths are relative to `backend/`.
+
+| File | Responsibility |
+| --- | --- |
+| `src/posts/errors.ts` | Publication conflict and shared service errors |
+| `src/posts/service.ts` | Actor/ID validation, conditional publication, authorized failure lookup |
+| `src/resolvers/publish-post.ts` | Request guard, identity, service call, GraphQL error mapping |
+| `src/resolvers/post.ts` | Shared post mapping and DataLoader author resolution |
+| `src/graphql.ts` and `src/resolvers/index.ts` | Publication mutation and resolver registration |
+| `tests/integration/publish-post.test.ts` | Service and GraphQL authorization, state, and concurrency coverage |
+
+The test suite covers:
+
+- Author and admin success, preserving ID, title, and ownership.
+- Anonymous rejection and invalid IDs without stored changes.
+- Identical NOT_FOUND behavior for missing and inaccessible posts, including
+  non-author attempts against already published posts.
+- Repeated publication conflicts for both authors and admins.
+- Concurrent direct-service attempts yielding one success and one conflict.
+- Concurrent independent GraphQL requests yielding one success and one conflict.
+- Correct author fields through DataLoader.
+- Anonymous visibility before and after publication through service and GraphQL.
+- Rejected headers and origins leaving posts unchanged.
+- Authentication failure and closed-client write failure returning generic errors,
+  with unchanged snapshots in those controlled scenarios.
+
+GraphQL tests execute the real schema and registered resolvers with session-cookie
+extraction and actual session lookup. Each concurrent call has its own context.
+They do not exercise the full Express HTTP route. Test fixtures live in a uniquely
+owned database under the integration-test setup and are removed during cleanup.
 
 ## Listing posts with pagination (implemented)
 
@@ -625,17 +780,24 @@ merging; a local verification result does not itself confirm CI success.
 
 ## Planned authorization scenarios
 
-These define subsequent single-post and publication work.
+Single-post lookup remains future work.
 
 | Scenario | Expected |
 | --- | --- |
 | Anonymous visitor requests a published post by ID | Allowed |
 | Anonymous visitor or non-author requests a draft by ID | Inaccessible; response contract to be defined |
 | Author or admin requests a draft by ID | Allowed |
-| Grace publishes her own draft | Allowed |
-| Ada publishes Grace's draft | Denied |
-| Admin publishes Grace's draft | Allowed |
-| Author or admin publishes an already published post | Rejected by business rule |
 | Future entry point invokes a post service | Same policy enforced using explicitly established identity |
 
+## Next agreed feature: post-status filtering
 
+After the publication feature merges, create a separate ticket to add a public
+`PostStatus` enum, `Post.status`, and an optional status argument on `posts`.
+
+Combine the requested status with authorization and cursor conditions before
+pagination. With a draft filter, anonymous callers see no drafts, ordinary users
+see only their own drafts, and admins see all drafts. Follow cursors to retrieve
+all matching records; the existing page-size bound still applies.
+
+This is planned work, not part of the publication mutation implementation.
+Unpublishing, deletion, and ownership transfer are also outside the current scope.
