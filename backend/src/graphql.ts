@@ -46,6 +46,10 @@ export const schema = buildSchema(/* GraphQL */ `
     title: String!
   }
 
+  input UpdatePostInput {
+    title: String!
+  }
+
   type AuthUser {
     id: ID!
     name: String!
@@ -60,6 +64,7 @@ export const schema = buildSchema(/* GraphQL */ `
     login(input: LoginInput!): LoginPayload
     logout: Boolean
     createDraft(input: CreateDraftInput!): Post
+    updatePost(id: ID!, input: UpdatePostInput!): Post
   }
 
   type Query {

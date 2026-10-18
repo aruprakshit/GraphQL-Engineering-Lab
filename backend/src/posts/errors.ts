@@ -11,3 +11,17 @@ export class InvalidPostTitleError extends Error {
     this.name = "InvalidPostTitleError";
   }
 }
+
+export class InvalidPostIdError extends Error {
+  constructor() {
+    super("Post ID must contain between 1 and 256 characters");
+    this.name = "InvalidPostIdError";
+  }
+}
+
+export class PostNotFoundError extends Error {
+  constructor() {
+    super("Post not found");
+    this.name = "PostNotFoundError";
+  }
+}

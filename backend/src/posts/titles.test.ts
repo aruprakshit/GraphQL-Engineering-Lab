@@ -1,3 +1,16 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Surrounding and internal whitespace | Trims surrounding whitespace and preserves internal spacing and tabs |
+ * | Titles of 1 or 200 characters | Accepts both length boundaries |
+ * | Whitespace surrounding a maximum-length title | Applies the length limit after trimming |
+ * | Unicode supplementary characters | Counts code points; accepts 200 emoji and rejects 201 |
+ * | Empty, whitespace-only, or oversized title | Throws InvalidPostTitleError |
+ * | Non-string input | Throws InvalidPostTitleError without coercion |
+ */
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { InvalidPostTitleError } from "./errors.js";

@@ -1,14 +1,14 @@
 # Authorization design
 
-Session authentication, post-list visibility, and authenticated draft creation
-are implemented. Post services enforce list visibility before pagination and
-assign draft ownership and initial status from trusted server-side values.
+Session authentication, post-list visibility, draft creation, and authorized title
+editing are implemented. Post services enforce visibility before pagination,
+assign draft ownership and initial status, and restrict updates to authors or admins.
 
 Post-list service and GraphQL integration tests have passed. Draft-creation unit,
 service, and GraphQL test coverage has been added; run the checks below before
 merging. The draft mutation has been manually verified in the playground.
 
-Single-post lookup, editing, and publication remain planned.
+Single-post lookup and publication remain planned. Editing has service and GraphQL integration coverage; run the checks below before merging issue #48.
 The permission matrix describes the complete intended policy; the status table
 below distinguishes implemented behavior from future work.
 
@@ -24,7 +24,8 @@ below distinguishes implemented behavior from future work.
 | Authentication-storage failure without anonymous fallback | Implemented and tested |
 | Single-post lookup | Planned |
 | Draft creation with trusted ownership and initial status | Implemented; automated coverage added |
-| Editing and publication | Planned |
+| Author/admin title editing with ownership in the update filter | Implemented; automated coverage added |
+| Publication | Planned |
 
 See [session authentication](authentication/README.md) for the identity lifecycle.
 
@@ -80,8 +81,8 @@ flowchart TD
 
 The post-list service enforces read visibility. The draft-creation service requires
 an authenticated actor, validates the title, and assigns ownership and draft status.
-Future editing and publication services will enforce their own object authorization
-and business rules.
+The title-editing service includes ownership in the database update condition.
+The future publication service will enforce authorization and state-transition rules.
 GraphQL resolvers obtain a trusted actor from request context and
 pass it to those services.
 
@@ -282,25 +283,169 @@ registered resolvers, cookie extraction, session lookup, and DataLoader with an
 isolated MongoDB database. These tests do not exercise the full Express route.
 The manual playground check verifies the browser mutation flow.
 
-## Editing a post (planned)
+## Editing a post (implemented)
 
 ```mermaid
-flowchart TD
-    START["Edit request with trusted actor"] --> AUTH{"Authenticated?"}
-    AUTH -->|No| DENY["Deny access"]
-    AUTH -->|Yes| LOAD["Load post"]
-    LOAD --> EXISTS{"Post exists?"}
-    EXISTS -->|No| MISSING["Return not found"]
-    EXISTS -->|Yes| PERMISSION{"Author or admin?"}
-    PERMISSION -->|No| DENY
-    PERMISSION -->|Yes| VALIDATE["Validate allowed content changes"]
-    VALIDATE --> SAVE["Persist changes"]
+sequenceDiagram
+    participant C as Client
+    participant G as GraphQL resolver
+    participant A as Session authentication
+    participant S as Post service
+    participant D as MongoDB
+
+    C->>G: POST updatePost with ID, title, and auth header
+    G->>G: Check method, custom header, and supplied Origin
+    G->>A: context.getActor()
+    A-->>G: Trusted actor or null
+    G->>S: updatePostTitle with actor, ID, and title
+    S->>S: Require authentication and validate ID and title
+    S->>D: Atomic title update with actor-dependent filter
+    alt No matching authorized post
+        D-->>S: null
+        S-->>G: PostNotFoundError
+        G-->>C: NOT_FOUND and null updatePost
+    else Authorized post matched
+        D-->>S: Updated document
+        S-->>G: Updated post
+        G->>G: Map public fields and resolve requested author through DataLoader
+        G-->>C: Updated title and original author
+    end
 ```
 
-Authors and admins may edit draft or published posts.
+The diagram shows the database branch after validation. Anonymous requests,
+invalid input, and rejected request guards stop before any update.
 
-Editing content must not implicitly transfer ownership, change roles,
-or publish a draft. Publication is a separate operation.
+### GraphQL contract
+
+```graphql
+input UpdatePostInput {
+  title: String!
+}
+
+extend type Mutation {
+  updatePost(id: ID!, input: UpdatePostInput!): Post
+}
+```
+
+```graphql
+mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
+  updatePost(id: $id, input: $input) {
+    id
+    title
+    author {
+      id
+      name
+    }
+  }
+}
+```
+
+Example variables; replace the ID with an existing post the caller may edit:
+
+```json
+{
+  "id": "your-post-id",
+  "input": {
+    "title": "  My updated title  "
+  }
+}
+```
+
+Use the login session cookie and `X-GraphQL-Auth: 1`. The request guard runs before
+session lookup. `updatePost` is nullable, so a resolver failure returns a null field
+with its error path rather than necessarily nulling the entire response.
+
+### Service contract and validation
+
+```typescript
+updatePostTitle(database, actor, id, { title })
+// Promise<PostDocument>
+```
+
+The service requires a trusted authenticated actor. It validates that the ID is a
+nonempty string of at most 256 characters without trimming it; both seed IDs and
+UUID post IDs are supported. The title uses the same normalization as creation:
+trim boundaries, preserve internal whitespace, require 1-200 Unicode code points.
+
+ID and title validation occur before the update. GraphQL rejects unknown input
+fields. The service constructs `$set` explicitly, so extra runtime properties
+cannot change the document ID, author, or status.
+
+### Authorization at the write boundary
+
+| Actor | MongoDB update filter |
+| --- | --- |
+| Anonymous | Rejected before database access |
+| Ordinary user | `{ _id: id, authorId: actor.userId }` |
+| Admin | `{ _id: id }` |
+
+The update is `{ $set: { title } }`. `findOneAndUpdate` uses
+`returnDocument: "after"` and `includeResultMetadata: false`, returning the updated
+document or null. Both draft and published posts can be edited. An admin editing
+another author's post does not become its author and does not change its status.
+
+The ownership condition is evaluated as part of the write, rather than relying
+only on an earlier read. If ownership no longer matches when the update executes,
+an ordinary user's update cannot match. The role is the trusted actor's role
+resolved for this request; this is not a transaction with later account-role changes.
+
+Setting a title to its existing normalized value succeeds when an authorized post
+matches. Concurrent authorized edits currently follow last-write-wins semantics;
+optimistic version checks are not implemented.
+
+### Missing and inaccessible posts
+
+For valid input, a missing ID and an existing post owned by someone else both
+produce `PostNotFoundError`. GraphQL maps both to `NOT_FOUND` with the message
+`Post not found` and error path `["updatePost"]`.
+
+This means no post available for this caller to edit. The response does not
+explicitly confirm that another user's private post exists. Consistent errors do
+not guarantee elimination of every possible timing or other side channel.
+
+### Error behavior
+
+| Failure | GraphQL result | Stored post |
+| --- | --- | --- |
+| Request guard rejected | FORBIDDEN | Unchanged |
+| Anonymous actor | UNAUTHENTICATED | Unchanged |
+| Invalid ID or title | BAD_USER_INPUT | Unchanged |
+| Missing or inaccessible post | NOT_FOUND; same generic message | Unchanged |
+| Unknown protected input field | GraphQL input rejection before execution | Unchanged |
+| Authentication storage failure | SERVICE_UNAVAILABLE; existing authentication error preserved | No update attempted |
+| Update storage failure | SERVICE_UNAVAILABLE; generic post-update message | No successful update claimed |
+
+The resolver keeps actor lookup outside its update error handler. The service
+propagates database errors, which the resolver sanitizes. A network or acknowledgement
+failure does not establish that a database write never committed. A later author
+field failure also does not roll back a completed title update.
+
+### Implementation and test coverage
+
+Paths are relative to `backend/`.
+
+| File | Responsibility |
+| --- | --- |
+| `src/posts/errors.ts` | Invalid-ID and shared post-not-found errors, plus existing service errors |
+| `src/posts/service.ts` | Validate actor/input and perform authorized atomic title update |
+| `src/posts/titles.ts` | Shared title normalization and validation |
+| `src/resolvers/update-post.ts` | Request checks, session identity, service call, and GraphQL errors |
+| `src/resolvers/post.ts` | Shared post mapping and DataLoader author resolution |
+| `src/graphql.ts` and `src/resolvers/index.ts` | Mutation schema and resolver registration |
+| `tests/integration/update-post.test.ts` | Direct-service and GraphQL editing coverage |
+
+Service tests cover author and admin edits of drafts and published posts, anonymous
+and non-author rejection, identical missing/inaccessible errors, invalid IDs and
+titles, ignored protected-property overrides, unchanged-title success, and a
+closed-client storage failure. Rejected operations compare stored snapshots to
+confirm documents remain unchanged in those controlled scenarios.
+
+GraphQL tests use real session lookup and the registered schema/resolvers. They
+cover successful title and author responses, rejected requests, missing/inaccessible
+posts, invalid input, protected-field rejection, authentication failure, and update
+failure. Each rejected edit verifies that stored posts remain unchanged. The tests
+use an isolated MongoDB database and clean up only their owned fixtures/database;
+they do not exercise the full Express HTTP route.
 
 ## Publishing a draft (planned)
 
@@ -480,19 +625,17 @@ merging; a local verification result does not itself confirm CI success.
 
 ## Planned authorization scenarios
 
-These define subsequent single-post, editing, and publication work.
+These define subsequent single-post and publication work.
 
 | Scenario | Expected |
 | --- | --- |
 | Anonymous visitor requests a published post by ID | Allowed |
 | Anonymous visitor or non-author requests a draft by ID | Inaccessible; response contract to be defined |
 | Author or admin requests a draft by ID | Allowed |
-| Ada edits Grace's post | Denied |
-| Grace edits her own post | Allowed |
-| Admin edits Grace's post | Allowed |
 | Grace publishes her own draft | Allowed |
 | Ada publishes Grace's draft | Denied |
 | Admin publishes Grace's draft | Allowed |
 | Author or admin publishes an already published post | Rejected by business rule |
 | Future entry point invokes a post service | Same policy enforced using explicitly established identity |
+
 

@@ -1,10 +1,14 @@
 import type { Db, Filter } from "mongodb";
 import { randomUUID } from "node:crypto";
-import { PostAuthenticationRequiredError } from "./errors.js";
 import { normalizePostTitle } from "./titles.js";
 import type { Actor } from "../auth/models.js";
 import type { PostDocument } from "../models.js";
 import { buildPostVisibilityFilter } from "./visibility.js";
+import {
+  InvalidPostIdError,
+  PostAuthenticationRequiredError,
+  PostNotFoundError,
+} from "./errors.js";
 
 export interface ListPostsOptions {
   pageSize: number;
@@ -17,6 +21,10 @@ export interface VisiblePostsPage {
 }
 
 export interface CreateDraftInput {
+  title: string;
+}
+
+export interface UpdatePostTitleInput {
   title: string;
 }
 
@@ -89,4 +97,46 @@ export async function createDraft(
   await database.collection<PostDocument>("posts").insertOne(post);
 
   return post;
+}
+
+export async function updatePostTitle(
+  database: Db,
+  actor: Actor | null,
+  id: string,
+  input: UpdatePostTitleInput,
+): Promise<PostDocument> {
+  if (!actor) {
+    throw new PostAuthenticationRequiredError();
+  }
+
+  if (typeof id !== "string" || id.length === 0 || id.length > 256) {
+    throw new InvalidPostIdError();
+  }
+
+  const title = normalizePostTitle(input.title);
+
+  const filter: Filter<PostDocument> =
+    actor.role === "admin"
+      ? { _id: id }
+      : {
+          _id: id,
+          authorId: actor.userId,
+        };
+
+  const updated = await database
+    .collection<PostDocument>("posts")
+    .findOneAndUpdate(
+      filter,
+      { $set: { title } },
+      {
+        returnDocument: "after",
+        includeResultMetadata: false,
+      },
+    );
+
+  if (!updated) {
+    throw new PostNotFoundError();
+  }
+
+  return updated;
 }
