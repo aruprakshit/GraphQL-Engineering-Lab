@@ -34,6 +34,8 @@ import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createUserLoader } from "../../src/loaders.js";
 import { encodePostCursor } from "../../src/pagination.js";
+import { InvalidPostStatusError } from "../../src/posts/errors.js";
+import type { ListPostsOptions } from "../../src/posts/service.js";
 
 test("post service visibility and pagination", async (t) => {
   const url = process.env.TEST_MONGO_URL;
@@ -474,6 +476,210 @@ test("post service visibility and pagination", async (t) => {
             assert.deepEqual(result.errors?.[0]?.path, ["posts"]);
           },
         );
+      },
+    );
+    await t.test(
+      "status filters narrow the authorized result set",
+      async () => {
+        const scenarios: {
+          actor: Actor | null;
+          status: PostDocument["status"];
+          expected: string[];
+        }[] = [
+          {
+            actor: null,
+            status: "draft",
+            expected: [],
+          },
+          {
+            actor: null,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: ada,
+            status: "draft",
+            expected: ["post-03", "post-06"],
+          },
+          {
+            actor: ada,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: grace,
+            status: "draft",
+            expected: ["post-02", "post-05"],
+          },
+          {
+            actor: grace,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: admin,
+            status: "draft",
+            expected: ["post-02", "post-03", "post-05", "post-06"],
+          },
+          {
+            actor: admin,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+        ];
+
+        for (const { actor, status, expected } of scenarios) {
+          const result = await listVisiblePosts(database, actor, {
+            pageSize: 20,
+            afterId: null,
+            status,
+          });
+
+          assert.deepEqual(
+            result.posts.map((post) => post._id),
+            expected,
+          );
+          assert.equal(result.hasNextPage, false);
+
+          for (const post of result.posts) {
+            assert.equal(post.status, status);
+          }
+        }
+      },
+    );
+    await t.test(
+      "omitted and null status preserve unfiltered visibility",
+      async () => {
+        const scenarios = [
+          { actor: null, expected: ["post-01", "post-04"] },
+          {
+            actor: ada,
+            expected: ["post-01", "post-03", "post-04", "post-06"],
+          },
+          {
+            actor: grace,
+            expected: ["post-01", "post-02", "post-04", "post-05"],
+          },
+          {
+            actor: admin,
+            expected: fixtures.map((post) => post._id),
+          },
+        ];
+
+        for (const { actor, expected } of scenarios) {
+          for (const status of [undefined, null]) {
+            const result = await listVisiblePosts(database, actor, {
+              pageSize: 20,
+              afterId: null,
+              status,
+            });
+
+            assert.deepEqual(
+              result.posts.map((post) => post._id),
+              expected,
+            );
+            assert.equal(result.hasNextPage, false);
+          }
+        }
+      },
+    );
+    await t.test("paginates only matching authorized drafts", async () => {
+      const first = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: null,
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        first.posts.map((post) => post._id),
+        ["post-02", "post-03"],
+      );
+      assert.equal(first.hasNextPage, true);
+
+      const second = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: "post-03",
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        second.posts.map((post) => post._id),
+        ["post-05", "post-06"],
+      );
+      assert.equal(second.hasNextPage, false);
+
+      const end = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: "post-06",
+        status: "draft",
+      });
+
+      assert.deepEqual(end.posts, []);
+      assert.equal(end.hasNextPage, false);
+
+      // GRACE'S POST-05 MUST NOT CONSUME ADA'S PAGE SLOT.
+      const adaPage = await listVisiblePosts(database, ada, {
+        pageSize: 1,
+        afterId: "post-03",
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        adaPage.posts.map((post) => post._id),
+        ["post-06"],
+      );
+      assert.equal(adaPage.hasNextPage, false);
+    });
+    await t.test(
+      "published pagination ignores intervening and trailing drafts",
+      async () => {
+        const first = await listVisiblePosts(database, null, {
+          pageSize: 1,
+          afterId: null,
+          status: "published",
+        });
+
+        assert.deepEqual(
+          first.posts.map((post) => post._id),
+          ["post-01"],
+        );
+        assert.equal(first.hasNextPage, true);
+
+        const second = await listVisiblePosts(database, null, {
+          pageSize: 1,
+          afterId: "post-01",
+          status: "published",
+        });
+
+        assert.deepEqual(
+          second.posts.map((post) => post._id),
+          ["post-04"],
+        );
+        assert.equal(second.hasNextPage, false);
+      },
+    );
+    await t.test(
+      "rejects unsupported status values before querying",
+      async () => {
+        for (const status of ["archived", "DRAFT", "", 123, {}]) {
+          let databaseCalls = 0;
+
+          // INTENTIONALLY BYPASS TYPES TO SIMULATE INVALID RUNTIME INPUT.
+          const options = {
+            pageSize: 2,
+            afterId: null,
+            status,
+          } as unknown as ListPostsOptions;
+
+          await assert.rejects(
+            listVisiblePosts(database, ada, options, () => {
+              databaseCalls += 1;
+            }),
+            InvalidPostStatusError,
+          );
+
+          assert.equal(databaseCalls, 0);
+        }
       },
     );
   } finally {
