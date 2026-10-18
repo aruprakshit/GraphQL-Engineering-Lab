@@ -25,3 +25,10 @@ export class PostNotFoundError extends Error {
     this.name = "PostNotFoundError";
   }
 }
+
+export class PostPublicationConflictError extends Error {
+  constructor() {
+    super("Post is no longer a draft");
+    this.name = "PostPublicationConflictError";
+  }
+}
