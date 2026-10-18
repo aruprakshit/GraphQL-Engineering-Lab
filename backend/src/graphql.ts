@@ -65,6 +65,7 @@ export const schema = buildSchema(/* GraphQL */ `
     logout: Boolean
     createDraft(input: CreateDraftInput!): Post
     updatePost(id: ID!, input: UpdatePostInput!): Post
+    publishPost(id: ID!): Post
   }
 
   type Query {

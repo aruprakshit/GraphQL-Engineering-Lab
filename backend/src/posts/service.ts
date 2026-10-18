@@ -8,6 +8,7 @@ import {
   InvalidPostIdError,
   PostAuthenticationRequiredError,
   PostNotFoundError,
+  PostPublicationConflictError,
 } from "./errors.js";
 
 export interface ListPostsOptions {
@@ -139,4 +140,55 @@ export async function updatePostTitle(
   }
 
   return updated;
+}
+
+export async function publishPost(
+  database: Db,
+  actor: Actor | null,
+  id: string,
+): Promise<PostDocument> {
+  if (!actor) {
+    throw new PostAuthenticationRequiredError();
+  }
+
+  if (typeof id !== "string" || id.length === 0 || id.length > 256) {
+    throw new InvalidPostIdError();
+  }
+
+  const authorizationFilter: Filter<PostDocument> =
+    actor.role === "admin"
+      ? { _id: id }
+      : {
+          _id: id,
+          authorId: actor.userId,
+        };
+
+  const posts = database.collection<PostDocument>("posts");
+
+  // REQUIRE AUTHORIZATION AND DRAFT STATUS IN THE SAME WRITE.
+  const published = await posts.findOneAndUpdate(
+    {
+      $and: [authorizationFilter, { status: "draft" }],
+    },
+    { $set: { status: "published" } },
+    {
+      returnDocument: "after",
+      includeResultMetadata: false,
+    },
+  );
+
+  if (published) {
+    return published;
+  }
+
+  // DISTINGUISH MISSING/INACCESSIBLE FROM A STATE CONFLICT.
+  const accessiblePost = await posts.findOne(authorizationFilter, {
+    projection: { _id: 1 },
+  });
+
+  if (!accessiblePost) {
+    throw new PostNotFoundError();
+  }
+
+  throw new PostPublicationConflictError();
 }
