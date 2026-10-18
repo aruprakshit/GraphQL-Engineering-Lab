@@ -1,3 +1,25 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Service: authenticated author creates a draft | Stores normalized title, generated ID, actor ownership, and draft status |
+ * | Service: same title submitted twice | Creates and stores distinct draft IDs |
+ * | Service: admin creates a draft | Uses the admin's own identity as author |
+ * | Service: caller supplies ownership, status, or ID | Ignores protected fields and uses server-controlled values |
+ * | Service: anonymous creation | Throws PostAuthenticationRequiredError without inserting |
+ * | Service: invalid title | Throws InvalidPostTitleError without inserting |
+ * | New draft visibility | Visible only to its author and admins |
+ * | Service: storage unavailable | Propagates failure without inserting |
+ * | GraphQL: user or admin creates a draft | Returns normalized draft and resolved author; stores correct ownership and status |
+ * | GraphQL: anonymous caller | Returns UNAUTHENTICATED without inserting |
+ * | GraphQL: blank or oversized title | Returns BAD_USER_INPUT without inserting |
+ * | GraphQL: missing custom header or untrusted origin | Returns FORBIDDEN without inserting |
+ * | GraphQL: protected ownership, status, or ID input fields | Rejects variables before resolver execution without inserting |
+ * | GraphQL: list newly created drafts | Enforces author and admin visibility |
+ * | GraphQL: authentication or write storage fails | Returns generic SERVICE_UNAVAILABLE without inserting |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";

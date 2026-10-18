@@ -1,3 +1,26 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Service: author edits own draft or published post | Normalizes and updates only the title |
+ * | Service: admin edits another author's draft or published post | Updates title while preserving ownership, ID, and status |
+ * | Service: anonymous edit | Throws PostAuthenticationRequiredError; all posts unchanged |
+ * | Service: non-author edit | Throws PostNotFoundError for draft and published posts; all posts unchanged |
+ * | Service: missing or inaccessible post | Returns the same Post not found error; all posts unchanged |
+ * | Service: invalid title or post ID | Throws the corresponding validation error; all posts unchanged |
+ * | Service: extra protected input properties | Changes only title; ignores replacement ID, author, and status |
+ * | Service: existing title submitted again | Succeeds with the unchanged post |
+ * | Service: storage unavailable | Propagates failure; all posts unchanged |
+ * | GraphQL: author or admin edits authorized draft or published post | Returns normalized title and resolved author; preserves ownership and status |
+ * | GraphQL: anonymous edit | Returns UNAUTHENTICATED; all posts unchanged |
+ * | GraphQL: missing or inaccessible post | Returns identical NOT_FOUND errors; all posts unchanged |
+ * | GraphQL: invalid title or empty ID | Returns BAD_USER_INPUT; all posts unchanged |
+ * | GraphQL: missing custom header or untrusted origin | Returns FORBIDDEN; all posts unchanged |
+ * | GraphQL: protected input fields | Rejects variables before resolver execution; all posts unchanged |
+ * | GraphQL: authentication or update storage fails | Returns generic SERVICE_UNAVAILABLE; all posts unchanged |
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
