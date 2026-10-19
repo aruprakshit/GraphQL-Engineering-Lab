@@ -1,6 +1,7 @@
 import { GraphQLError } from "graphql";
 import type { GraphQLContext } from "../graphql-context.js";
 import type { PostDocument } from "../models.js";
+import { toGraphQLPostStatus } from "../post-status.js";
 
 async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
   try {
@@ -25,6 +26,7 @@ export function toGraphQLPost(post: PostDocument, context: GraphQLContext) {
   return {
     id: post._id,
     title: post.title,
+    status: toGraphQLPostStatus(post.status),
     author: () => resolvePostAuthor(post.authorId, context),
   };
 }

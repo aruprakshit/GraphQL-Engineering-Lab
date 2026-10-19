@@ -303,18 +303,19 @@ test("post title editing service", async (t) => {
         admin: await createSession(database, "admin"),
       };
 
-      const mutation = `
-    mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
-      updatePost(id: $id, input: $input) {
-        id
-        title
-        author {
-          id
-          name
+      const mutation = /* GraphQL */ `
+        mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
+          updatePost(id: $id, input: $input) {
+            id
+            title
+            status
+            author {
+              id
+              name
+            }
+          }
         }
-      }
-    }
-  `;
+      `;
 
       interface RequestOptions {
         authHeader?: string;
@@ -414,6 +415,7 @@ test("post title editing service", async (t) => {
                   updatePost: {
                     id,
                     title,
+                    status: before.status === "draft" ? "DRAFT" : "PUBLISHED",
                     author: {
                       id: scenario.authorId,
                       name: scenario.authorName,

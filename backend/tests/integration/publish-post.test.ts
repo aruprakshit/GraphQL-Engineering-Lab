@@ -306,6 +306,7 @@ test("post publication service", async (t) => {
           publishPost(id: $id) {
             id
             title
+            status
             author {
               id
               name
@@ -391,6 +392,7 @@ test("post publication service", async (t) => {
                 publishPost: {
                   id: draft._id,
                   title: draft.title,
+                  status: "PUBLISHED",
                   author: { id: "ada", name: "Ada" },
                 },
               }),

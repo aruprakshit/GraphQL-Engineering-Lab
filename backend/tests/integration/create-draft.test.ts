@@ -233,6 +233,7 @@ test("draft creation service", async (t) => {
           createDraft(input: $input) {
             id
             title
+            status
             author {
               id
               name
@@ -331,6 +332,7 @@ test("draft creation service", async (t) => {
                 createDraft: {
                   id: stored._id,
                   title,
+                  status: "DRAFT",
                   author: {
                     id: person.id,
                     name: person.name,
@@ -430,15 +432,17 @@ test("draft creation service", async (t) => {
           const stored = await posts.findOne({ title });
           assert.ok(stored);
 
-          const source = `
-      query {
-        posts(first: 20) {
-          edges {
-            node { id }
-          }
-        }
-      }
-    `;
+          const source = /* GraphQL */ `
+            query {
+              posts(first: 20) {
+                edges {
+                  node {
+                    id
+                  }
+                }
+              }
+            }
+          `;
 
           for (const scenario of [
             { session: null, visible: false },

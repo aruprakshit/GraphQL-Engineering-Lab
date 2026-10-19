@@ -1,4 +1,5 @@
 import { GraphQLError } from "graphql";
+import type { GraphQLPostStatus } from "./post-status.js";
 
 const DEFAULT_PAGE_SIZE = 5;
 const MAX_PAGE_SIZE = 20;
@@ -6,6 +7,7 @@ const MAX_PAGE_SIZE = 20;
 export interface PostsArguments {
   first?: number | null;
   after?: string | null;
+  status?: GraphQLPostStatus | null;
 }
 
 function invalidArgument(message: string): GraphQLError {

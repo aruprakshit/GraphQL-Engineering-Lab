@@ -315,6 +315,10 @@ test("post service visibility and pagination", async (t) => {
           first = 20,
           after: string | null = null,
           authenticationDatabase = database,
+          options: {
+            source?: string;
+            variables?: Record<string, unknown>;
+          } = {},
         ) {
           const cookie = session ? `session=${session.token}` : undefined;
           const token = readSessionCookie(cookie);
@@ -346,12 +350,203 @@ test("post service visibility and pagination", async (t) => {
           return graphql({
             schema,
             rootValue,
-            source,
-            variableValues: { first, after },
+            source: options.source ?? source,
+            variableValues: { first, after, ...options.variables },
             contextValue: context,
           });
         }
+        const filteredSource = /* GraphQL */ `
+          query FilteredPosts(
+            $first: Int!
+            $after: String
+            $status: PostStatus
+          ) {
+            posts(first: $first, after: $after, status: $status) {
+              edges {
+                cursor
+                node {
+                  id
+                  status
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        `;
 
+        function executeFilteredPosts(
+          session: CreatedSession | null,
+          status: unknown,
+          first = 20,
+          after: string | null = null,
+        ) {
+          return executePosts(session, first, after, database, {
+            source: filteredSource,
+            variables: status === undefined ? {} : { status },
+          });
+        }
+
+        function expectedFilteredData(ids: string[], hasNextPage = false) {
+          return {
+            posts: {
+              edges: ids.map((id) => {
+                const fixture = fixtures.find((post) => post._id === id);
+                assert.ok(fixture);
+
+                return {
+                  cursor: encodePostCursor(id),
+                  node: {
+                    id,
+                    status: fixture.status === "draft" ? "DRAFT" : "PUBLISHED",
+                  },
+                };
+              }),
+              pageInfo: {
+                hasNextPage,
+                endCursor: ids.length
+                  ? encodePostCursor(ids[ids.length - 1]!)
+                  : null,
+              },
+            },
+          };
+        }
+        await t.test(
+          "status filtering preserves authorization and maps enum values",
+          async () => {
+            const callers = [
+              {
+                session: null,
+                all: ["post-01", "post-04"],
+                drafts: [],
+              },
+              {
+                session: sessions.ada,
+                all: ["post-01", "post-03", "post-04", "post-06"],
+                drafts: ["post-03", "post-06"],
+              },
+              {
+                session: sessions.grace,
+                all: ["post-01", "post-02", "post-04", "post-05"],
+                drafts: ["post-02", "post-05"],
+              },
+              {
+                session: sessions.admin,
+                all: fixtures.map((post) => post._id),
+                drafts: ["post-02", "post-03", "post-05", "post-06"],
+              },
+            ];
+
+            for (const caller of callers) {
+              for (const status of [undefined, null, "DRAFT", "PUBLISHED"]) {
+                const expectedIds =
+                  status === "DRAFT"
+                    ? caller.drafts
+                    : status === "PUBLISHED"
+                      ? ["post-01", "post-04"]
+                      : caller.all;
+
+                const result = await executeFilteredPosts(
+                  caller.session,
+                  status,
+                );
+
+                assert.equal(result.errors, undefined);
+                assert.equal(
+                  JSON.stringify(result.data),
+                  JSON.stringify(expectedFilteredData(expectedIds)),
+                );
+              }
+            }
+          },
+        );
+
+        await t.test(
+          "filtered pagination uses only matching visible posts",
+          async () => {
+            const scenarios = [
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: null,
+                ids: ["post-02", "post-03"],
+                hasNextPage: true,
+              },
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: encodePostCursor("post-03"),
+                ids: ["post-05", "post-06"],
+                hasNextPage: false,
+              },
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: encodePostCursor("post-06"),
+                ids: [],
+                hasNextPage: false,
+              },
+              {
+                session: sessions.ada,
+                status: "DRAFT",
+                first: 1,
+                after: encodePostCursor("post-03"),
+                ids: ["post-06"],
+                hasNextPage: false,
+              },
+              {
+                session: null,
+                status: "PUBLISHED",
+                first: 1,
+                after: null,
+                ids: ["post-01"],
+                hasNextPage: true,
+              },
+              {
+                session: null,
+                status: "PUBLISHED",
+                first: 1,
+                after: encodePostCursor("post-01"),
+                ids: ["post-04"],
+                hasNextPage: false,
+              },
+            ];
+
+            for (const scenario of scenarios) {
+              const result = await executeFilteredPosts(
+                scenario.session,
+                scenario.status,
+                scenario.first,
+                scenario.after,
+              );
+
+              assert.equal(result.errors, undefined);
+              assert.equal(
+                JSON.stringify(result.data),
+                JSON.stringify(
+                  expectedFilteredData(scenario.ids, scenario.hasNextPage),
+                ),
+              );
+            }
+          },
+        );
+
+        await t.test(
+          "GraphQL rejects invalid enum input before execution",
+          async () => {
+            for (const status of ["draft", "ARCHIVED", "", 123]) {
+              const result = await executeFilteredPosts(sessions.admin, status);
+
+              assert.ok(result.errors?.length);
+              assert.equal(result.data, undefined);
+            }
+          },
+        );
         await t.test(
           "returns only the posts visible to each caller",
           async () => {
