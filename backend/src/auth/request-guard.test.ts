@@ -8,6 +8,10 @@
  * | GET or missing/incorrect header | AuthRequestRejectedError |
  * | Lookalike host, wrong port, or null origin | AuthRequestRejectedError |
  * | Invalid origin configuration | Creation throws |
+ *
+ * Reading guide:
+ * - These are request metadata checks, not password or session checks.
+ * - Origin comparisons must be exact; a similar host or different port is not trusted.
  */
 
 import assert from "node:assert/strict";
@@ -40,6 +44,7 @@ test("accepts CLI requests with the required header", () => {
 test("rejects disallowed authentication requests", () => {
   const guard = createAuthRequestGuard(allowedOrigin);
 
+  // Vary one request property at a time to expose accidental trust of bad metadata.
   const requests = [
     { method: "GET", origin: allowedOrigin, authHeader: "1" },
     { method: "POST", origin: allowedOrigin },

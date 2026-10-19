@@ -9,11 +9,13 @@ import {
   PostAuthenticationRequiredError,
   PostNotFoundError,
   PostPublicationConflictError,
+  InvalidPostStatusError,
 } from "./errors.js";
 
 export interface ListPostsOptions {
   pageSize: number;
   afterId: string | null;
+  status?: PostDocument["status"] | null;
 }
 
 export interface VisiblePostsPage {
@@ -28,14 +30,12 @@ export interface CreateDraftInput {
 export interface UpdatePostTitleInput {
   title: string;
 }
-
 export async function listVisiblePosts(
   database: Db,
   actor: Actor | null,
-  { pageSize, afterId }: ListPostsOptions,
+  { pageSize, afterId, status }: ListPostsOptions,
   logDatabaseCall: (operation: string) => void = () => {},
 ): Promise<VisiblePostsPage> {
-  // VALIDATE AT THE SERVICE BOUNDARY FOR ALL CALLERS.
   if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 20) {
     throw new Error("pageSize must be an integer between 1 and 20");
   }
@@ -49,17 +49,32 @@ export async function listVisiblePosts(
     throw new Error("Invalid post cursor boundary");
   }
 
-  const visibility = buildPostVisibilityFilter(actor);
+  if (
+    status !== undefined &&
+    status !== null &&
+    status !== "draft" &&
+    status !== "published"
+  ) {
+    throw new InvalidPostStatusError();
+  }
 
-  const filter: Filter<PostDocument> =
-    afterId === null
-      ? visibility
-      : {
-          $and: [visibility, { _id: { $gt: afterId } }],
-        };
+  // AUTHORIZATION IS ALWAYS INCLUDED.
+  const conditions: Filter<PostDocument>[] = [buildPostVisibilityFilter(actor)];
+
+  if (status !== undefined && status !== null) {
+    conditions.push({ status });
+  }
+
+  if (afterId !== null) {
+    conditions.push({ _id: { $gt: afterId } });
+  }
+
+  const filter: Filter<PostDocument> = {
+    $and: conditions,
+  };
 
   logDatabaseCall(
-    `posts.find after=${JSON.stringify(afterId)} limit=${pageSize + 1}`,
+    `posts.find after=${JSON.stringify(afterId)} status=${JSON.stringify(status ?? null)} limit=${pageSize + 1}`,
   );
 
   const documents = await database

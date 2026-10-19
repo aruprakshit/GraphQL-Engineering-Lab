@@ -8,6 +8,10 @@
  * | Missing session or different name/case | Returns null |
  * | Malformed, quoted, or encoded value | Returns null |
  * | Duplicate session cookies | Returns null, even for identical tokens |
+ *
+ * Reading guide:
+ * - Synthetic tokens test extraction without MongoDB or real credentials.
+ * - Duplicate session names are ambiguous, so neither value should be accepted.
  */
 
 import assert from "node:assert/strict";
@@ -41,6 +45,7 @@ test("returns null when no session cookie exists", () => {
 });
 
 test("rejects malformed session values", () => {
+  // Exercise malformed syntax as well as values that fail the token format.
   for (const header of [
     "session",
     "session=",

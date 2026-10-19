@@ -7,6 +7,10 @@
  * | Missing, malformed, or already revoked session | Returns logout: true and clears cookie |
  * | Request missing the required authentication header | Returns FORBIDDEN without revoking session or clearing cookie |
  * | Session storage fails | Returns generic SERVICE_UNAVAILABLE, preserves session, and does not clear cookie |
+ *
+ * Reading guide:
+ * - The cookie callback counts clearing attempts; MongoDB proves actual revocation.
+ * - Logout must not verify passwords or resolve an actor, so unrelated helpers throw if called.
  */
 
 import assert from "node:assert/strict";
@@ -67,6 +71,7 @@ test("GraphQL logout", async (t) => {
       authHeader = "1",
       requestDatabase = database,
     ) {
+      // A successful result must clear the cookie once; rejected operations must not clear it.
       let clearCalls = 0;
 
       const unexpectedCall = (): never => {

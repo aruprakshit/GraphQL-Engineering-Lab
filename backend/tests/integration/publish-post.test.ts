@@ -21,6 +21,11 @@
  * | GraphQL: concurrent publication requests | Exactly one success and one CONFLICT; stored post is published |
  * | GraphQL: anonymous query before and after publication | Hides the draft before publication and includes it afterward |
  * | GraphQL: authentication or write storage fails | Returns generic SERVICE_UNAVAILABLE; posts unchanged |
+ *
+ * Reading guide:
+ * - Publication changes draft to published; repeating it is a conflict, not an idempotent success.
+ * - Concurrent calls must yield exactly one successful state transition.
+ * - Service and GraphQL cases separately verify authorization, visibility, and sanitized failures.
  */
 
 import assert from "node:assert/strict";
@@ -85,6 +90,7 @@ test("post publication service", async (t) => {
     return post;
   }
 
+  // Compare complete sorted documents to catch unintended title, owner, or status changes.
   const snapshot = (): Promise<PostDocument[]> =>
     posts.find({}).sort({ _id: 1 }).toArray();
 
@@ -200,6 +206,7 @@ test("post publication service", async (t) => {
         const draft = await insertPost();
 
         // START BOTH OPERATIONS WITHOUT AWAITING THE FIRST.
+        // Collect both outcomes because one conflict is expected; neither operation waits for the other.
         const results = await Promise.allSettled([
           publishPost(database, ada, draft._id),
           publishPost(database, admin, draft._id),
@@ -306,6 +313,7 @@ test("post publication service", async (t) => {
           publishPost(id: $id) {
             id
             title
+            status
             author {
               id
               name
@@ -391,6 +399,7 @@ test("post publication service", async (t) => {
                 publishPost: {
                   id: draft._id,
                   title: draft.title,
+                  status: "PUBLISHED",
                   author: { id: "ada", name: "Ada" },
                 },
               }),

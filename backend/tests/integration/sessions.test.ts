@@ -11,6 +11,10 @@
  * | Another session for same account | Distinct token; remains valid |
  * | Role changes | Existing session resolves current role |
  * | Missing user or account | Resolution returns null; creation rejects |
+ *
+ * Reading guide:
+ * - Real MongoDB fixtures verify hashed storage, expiry, revocation, and current identity.
+ * - Explicit dates test expiry immediately; background TTL cleanup is not required.
  */
 
 import assert from "node:assert/strict";
@@ -71,6 +75,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
 
     // 3. ACT: CREATE AND RESOLVE A SESSION
     const created = await createSession(database, userId, now);
+    // Look up the persisted hash, keeping the raw token only on the client-facing side.
     const tokenHash = hashSessionToken(created.token);
 
     const stored = await database

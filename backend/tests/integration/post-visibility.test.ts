@@ -14,6 +14,20 @@
  * | GraphQL: anonymous, author, and admin sessions | Returns authorized posts with matching author names, encoded cursors, and pageInfo |
  * | GraphQL: author requests consecutive pages | Preserves encoded cursors and correct pageInfo across authorized pages |
  * | GraphQL: authentication storage fails | Returns generic SERVICE_UNAVAILABLE at posts and data: null; no anonymous fallback |
+ * | Service: draft or published status filter | Narrows the authorized set for anonymous callers, authors, and admins without exposing hidden drafts |
+ * | Service: omitted or null status | Preserves unfiltered visibility for every caller role |
+ * | Service: draft-filtered pagination | Returns only matching authorized drafts with correct hasNextPage and an empty final page |
+ * | Service: published-filtered pagination | Ignores intervening and trailing drafts when filling pages and computing hasNextPage |
+ * | Service: unsupported runtime status | Throws InvalidPostStatusError before any database query |
+ * | GraphQL: DRAFT or PUBLISHED enum filter | Maps enum values correctly, returns matching status fields, and preserves authorization |
+ * | GraphQL: omitted or null status | Returns each caller's unfiltered authorized set |
+ * | GraphQL: filtered pagination | Returns matching visible posts with correct cursors and pageInfo, including the empty final page |
+ * | GraphQL: invalid enum input | Returns validation errors and no data before execution |
+ *
+ * Reading guide:
+ * - Service tests establish visibility first; nested GraphQL tests verify session and enum wiring.
+ * - Interleaved author drafts expose mistakes that filter only after pagination.
+ * - A unique database keeps page contents independent of fixtures from other suites.
  */
 
 import assert from "node:assert/strict";
@@ -34,6 +48,8 @@ import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createUserLoader } from "../../src/loaders.js";
 import { encodePostCursor } from "../../src/pagination.js";
+import { InvalidPostStatusError } from "../../src/posts/errors.js";
+import type { ListPostsOptions } from "../../src/posts/service.js";
 
 test("post service visibility and pagination", async (t) => {
   const url = process.env.TEST_MONGO_URL;
@@ -313,6 +329,10 @@ test("post service visibility and pagination", async (t) => {
           first = 20,
           after: string | null = null,
           authenticationDatabase = database,
+          options: {
+            source?: string;
+            variables?: Record<string, unknown>;
+          } = {},
         ) {
           const cookie = session ? `session=${session.token}` : undefined;
           const token = readSessionCookie(cookie);
@@ -344,12 +364,203 @@ test("post service visibility and pagination", async (t) => {
           return graphql({
             schema,
             rootValue,
-            source,
-            variableValues: { first, after },
+            source: options.source ?? source,
+            variableValues: { first, after, ...options.variables },
             contextValue: context,
           });
         }
+        const filteredSource = /* GraphQL */ `
+          query FilteredPosts(
+            $first: Int!
+            $after: String
+            $status: PostStatus
+          ) {
+            posts(first: $first, after: $after, status: $status) {
+              edges {
+                cursor
+                node {
+                  id
+                  status
+                }
+              }
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+            }
+          }
+        `;
 
+        function executeFilteredPosts(
+          session: CreatedSession | null,
+          status: unknown,
+          first = 20,
+          after: string | null = null,
+        ) {
+          return executePosts(session, first, after, database, {
+            source: filteredSource,
+            variables: status === undefined ? {} : { status },
+          });
+        }
+
+        function expectedFilteredData(ids: string[], hasNextPage = false) {
+          return {
+            posts: {
+              edges: ids.map((id) => {
+                const fixture = fixtures.find((post) => post._id === id);
+                assert.ok(fixture);
+
+                return {
+                  cursor: encodePostCursor(id),
+                  node: {
+                    id,
+                    status: fixture.status === "draft" ? "DRAFT" : "PUBLISHED",
+                  },
+                };
+              }),
+              pageInfo: {
+                hasNextPage,
+                endCursor: ids.length
+                  ? encodePostCursor(ids[ids.length - 1]!)
+                  : null,
+              },
+            },
+          };
+        }
+        await t.test(
+          "status filtering preserves authorization and maps enum values",
+          async () => {
+            const callers = [
+              {
+                session: null,
+                all: ["post-01", "post-04"],
+                drafts: [],
+              },
+              {
+                session: sessions.ada,
+                all: ["post-01", "post-03", "post-04", "post-06"],
+                drafts: ["post-03", "post-06"],
+              },
+              {
+                session: sessions.grace,
+                all: ["post-01", "post-02", "post-04", "post-05"],
+                drafts: ["post-02", "post-05"],
+              },
+              {
+                session: sessions.admin,
+                all: fixtures.map((post) => post._id),
+                drafts: ["post-02", "post-03", "post-05", "post-06"],
+              },
+            ];
+
+            for (const caller of callers) {
+              for (const status of [undefined, null, "DRAFT", "PUBLISHED"]) {
+                const expectedIds =
+                  status === "DRAFT"
+                    ? caller.drafts
+                    : status === "PUBLISHED"
+                      ? ["post-01", "post-04"]
+                      : caller.all;
+
+                const result = await executeFilteredPosts(
+                  caller.session,
+                  status,
+                );
+
+                assert.equal(result.errors, undefined);
+                assert.equal(
+                  JSON.stringify(result.data),
+                  JSON.stringify(expectedFilteredData(expectedIds)),
+                );
+              }
+            }
+          },
+        );
+
+        await t.test(
+          "filtered pagination uses only matching visible posts",
+          async () => {
+            const scenarios = [
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: null,
+                ids: ["post-02", "post-03"],
+                hasNextPage: true,
+              },
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: encodePostCursor("post-03"),
+                ids: ["post-05", "post-06"],
+                hasNextPage: false,
+              },
+              {
+                session: sessions.admin,
+                status: "DRAFT",
+                first: 2,
+                after: encodePostCursor("post-06"),
+                ids: [],
+                hasNextPage: false,
+              },
+              {
+                session: sessions.ada,
+                status: "DRAFT",
+                first: 1,
+                after: encodePostCursor("post-03"),
+                ids: ["post-06"],
+                hasNextPage: false,
+              },
+              {
+                session: null,
+                status: "PUBLISHED",
+                first: 1,
+                after: null,
+                ids: ["post-01"],
+                hasNextPage: true,
+              },
+              {
+                session: null,
+                status: "PUBLISHED",
+                first: 1,
+                after: encodePostCursor("post-01"),
+                ids: ["post-04"],
+                hasNextPage: false,
+              },
+            ];
+
+            for (const scenario of scenarios) {
+              const result = await executeFilteredPosts(
+                scenario.session,
+                scenario.status,
+                scenario.first,
+                scenario.after,
+              );
+
+              assert.equal(result.errors, undefined);
+              assert.equal(
+                JSON.stringify(result.data),
+                JSON.stringify(
+                  expectedFilteredData(scenario.ids, scenario.hasNextPage),
+                ),
+              );
+            }
+          },
+        );
+
+        await t.test(
+          "GraphQL rejects invalid enum input before execution",
+          async () => {
+            for (const status of ["draft", "ARCHIVED", "", 123]) {
+              const result = await executeFilteredPosts(sessions.admin, status);
+
+              assert.ok(result.errors?.length);
+              assert.equal(result.data, undefined);
+            }
+          },
+        );
         await t.test(
           "returns only the posts visible to each caller",
           async () => {
@@ -474,6 +685,211 @@ test("post service visibility and pagination", async (t) => {
             assert.deepEqual(result.errors?.[0]?.path, ["posts"]);
           },
         );
+      },
+    );
+    await t.test(
+      "status filters narrow the authorized result set",
+      async () => {
+        // Run the same filter against different identities; filtering must never widen permissions.
+        const scenarios: {
+          actor: Actor | null;
+          status: PostDocument["status"];
+          expected: string[];
+        }[] = [
+          {
+            actor: null,
+            status: "draft",
+            expected: [],
+          },
+          {
+            actor: null,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: ada,
+            status: "draft",
+            expected: ["post-03", "post-06"],
+          },
+          {
+            actor: ada,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: grace,
+            status: "draft",
+            expected: ["post-02", "post-05"],
+          },
+          {
+            actor: grace,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+          {
+            actor: admin,
+            status: "draft",
+            expected: ["post-02", "post-03", "post-05", "post-06"],
+          },
+          {
+            actor: admin,
+            status: "published",
+            expected: ["post-01", "post-04"],
+          },
+        ];
+
+        for (const { actor, status, expected } of scenarios) {
+          const result = await listVisiblePosts(database, actor, {
+            pageSize: 20,
+            afterId: null,
+            status,
+          });
+
+          assert.deepEqual(
+            result.posts.map((post) => post._id),
+            expected,
+          );
+          assert.equal(result.hasNextPage, false);
+
+          for (const post of result.posts) {
+            assert.equal(post.status, status);
+          }
+        }
+      },
+    );
+    await t.test(
+      "omitted and null status preserve unfiltered visibility",
+      async () => {
+        const scenarios = [
+          { actor: null, expected: ["post-01", "post-04"] },
+          {
+            actor: ada,
+            expected: ["post-01", "post-03", "post-04", "post-06"],
+          },
+          {
+            actor: grace,
+            expected: ["post-01", "post-02", "post-04", "post-05"],
+          },
+          {
+            actor: admin,
+            expected: fixtures.map((post) => post._id),
+          },
+        ];
+
+        for (const { actor, expected } of scenarios) {
+          for (const status of [undefined, null]) {
+            const result = await listVisiblePosts(database, actor, {
+              pageSize: 20,
+              afterId: null,
+              status,
+            });
+
+            assert.deepEqual(
+              result.posts.map((post) => post._id),
+              expected,
+            );
+            assert.equal(result.hasNextPage, false);
+          }
+        }
+      },
+    );
+    await t.test("paginates only matching authorized drafts", async () => {
+      const first = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: null,
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        first.posts.map((post) => post._id),
+        ["post-02", "post-03"],
+      );
+      assert.equal(first.hasNextPage, true);
+
+      const second = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: "post-03",
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        second.posts.map((post) => post._id),
+        ["post-05", "post-06"],
+      );
+      assert.equal(second.hasNextPage, false);
+
+      const end = await listVisiblePosts(database, admin, {
+        pageSize: 2,
+        afterId: "post-06",
+        status: "draft",
+      });
+
+      assert.deepEqual(end.posts, []);
+      assert.equal(end.hasNextPage, false);
+
+      // GRACE'S POST-05 MUST NOT CONSUME ADA'S PAGE SLOT.
+      const adaPage = await listVisiblePosts(database, ada, {
+        pageSize: 1,
+        afterId: "post-03",
+        status: "draft",
+      });
+
+      assert.deepEqual(
+        adaPage.posts.map((post) => post._id),
+        ["post-06"],
+      );
+      assert.equal(adaPage.hasNextPage, false);
+    });
+    await t.test(
+      "published pagination ignores intervening and trailing drafts",
+      async () => {
+        const first = await listVisiblePosts(database, null, {
+          pageSize: 1,
+          afterId: null,
+          status: "published",
+        });
+
+        assert.deepEqual(
+          first.posts.map((post) => post._id),
+          ["post-01"],
+        );
+        assert.equal(first.hasNextPage, true);
+
+        const second = await listVisiblePosts(database, null, {
+          pageSize: 1,
+          afterId: "post-01",
+          status: "published",
+        });
+
+        assert.deepEqual(
+          second.posts.map((post) => post._id),
+          ["post-04"],
+        );
+        assert.equal(second.hasNextPage, false);
+      },
+    );
+    await t.test(
+      "rejects unsupported status values before querying",
+      async () => {
+        for (const status of ["archived", "DRAFT", "", 123, {}]) {
+          let databaseCalls = 0;
+
+          // INTENTIONALLY BYPASS TYPES TO SIMULATE INVALID RUNTIME INPUT.
+          const options = {
+            pageSize: 2,
+            afterId: null,
+            status,
+          } as unknown as ListPostsOptions;
+
+          await assert.rejects(
+            listVisiblePosts(database, ada, options, () => {
+              databaseCalls += 1;
+            }),
+            InvalidPostStatusError,
+          );
+
+          assert.equal(databaseCalls, 0);
+        }
       },
     );
   } finally {

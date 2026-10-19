@@ -19,6 +19,11 @@
  * | GraphQL: missing custom header or untrusted origin | Returns FORBIDDEN; all posts unchanged |
  * | GraphQL: protected input fields | Rejects variables before resolver execution; all posts unchanged |
  * | GraphQL: authentication or update storage fails | Returns generic SERVICE_UNAVAILABLE; all posts unchanged |
+ *
+ * Reading guide:
+ * - Direct service tests check ownership and title-only updates; GraphQL tests check public errors.
+ * - Full collection snapshots prove rejected edits changed no post, not just the target title.
+ * - Missing and inaccessible posts share an error to avoid revealing protected records.
  */
 
 import assert from "node:assert/strict";
@@ -96,6 +101,7 @@ test("post title editing service", async (t) => {
     },
   ];
 
+  // Sort snapshots so equality detects document changes rather than collection iteration order.
   const snapshot = (): Promise<PostDocument[]> =>
     posts.find({}).sort({ _id: 1 }).toArray();
 
@@ -303,18 +309,19 @@ test("post title editing service", async (t) => {
         admin: await createSession(database, "admin"),
       };
 
-      const mutation = `
-    mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
-      updatePost(id: $id, input: $input) {
-        id
-        title
-        author {
-          id
-          name
+      const mutation = /* GraphQL */ `
+        mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
+          updatePost(id: $id, input: $input) {
+            id
+            title
+            status
+            author {
+              id
+              name
+            }
+          }
         }
-      }
-    }
-  `;
+      `;
 
       interface RequestOptions {
         authHeader?: string;
@@ -414,6 +421,7 @@ test("post title editing service", async (t) => {
                   updatePost: {
                     id,
                     title,
+                    status: before.status === "draft" ? "DRAFT" : "PUBLISHED",
                     author: {
                       id: scenario.authorId,
                       name: scenario.authorName,

@@ -32,3 +32,10 @@ export class PostPublicationConflictError extends Error {
     this.name = "PostPublicationConflictError";
   }
 }
+
+export class InvalidPostStatusError extends Error {
+  constructor() {
+    super("Status must be draft or published");
+    this.name = "InvalidPostStatusError";
+  }
+}

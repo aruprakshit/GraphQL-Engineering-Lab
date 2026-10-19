@@ -8,6 +8,7 @@ import {
 import { withSpan } from "../tracing.js";
 import { listVisiblePosts } from "../posts/service.js";
 import { toGraphQLPost } from "./post.js";
+import { fromGraphQLPostStatus } from "../post-status.js";
 
 // FETCH THE BOUNDED LIST OF POSTS
 async function resolvePostsConnection(
@@ -16,6 +17,7 @@ async function resolvePostsConnection(
 ) {
   // VALIDATE BEFORE AUTHENTICATION OR POST DATABASE WORK.
   const { pageSize, afterId } = parsePostsArguments(args);
+  const status = fromGraphQLPostStatus(args.status);
 
   // AUTHENTICATION FAILURE MUST NOT BECOME ANONYMOUS ACCESS.
   const actor = await context.getActor();
@@ -24,7 +26,7 @@ async function resolvePostsConnection(
     const { posts, hasNextPage } = await listVisiblePosts(
       context.database,
       actor,
-      { pageSize, afterId },
+      { pageSize, afterId, status },
       context.logDatabaseCall,
     );
 

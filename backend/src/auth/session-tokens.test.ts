@@ -6,6 +6,10 @@
  * | Generate two tokens | Valid distinct 64-character lowercase hex tokens |
  * | Hash token repeatedly | Consistent hex hash different from raw token |
  * | Malformed input | Validation returns false; hashing invalid string throws |
+ *
+ * Reading guide:
+ * - Generation produces the client token; hashing produces the database lookup key.
+ * - Validation rejects malformed values before they can become database queries.
  */
 
 import assert from "node:assert/strict";
@@ -38,6 +42,7 @@ test("hashes a token consistently without returning the raw token", () => {
   // ASSERT
   assert.equal(hashSessionToken(token), hash);
   assert.match(hash, /^[0-9a-f]{64}$/);
+  // MongoDB stores the derived lookup key, never the raw browser token.
   assert.notEqual(hash, token);
 });
 

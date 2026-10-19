@@ -15,6 +15,7 @@ export const schema = buildSchema(/* GraphQL */ `
     id: ID!
     title: String!
     author: User
+    status: PostStatus!
   }
 
   type PostEdge {
@@ -35,6 +36,11 @@ export const schema = buildSchema(/* GraphQL */ `
   enum AccountRole {
     USER
     ADMIN
+  }
+
+  enum PostStatus {
+    DRAFT
+    PUBLISHED
   }
 
   input LoginInput {
@@ -71,7 +77,7 @@ export const schema = buildSchema(/* GraphQL */ `
   type Query {
     hello: String!
     learningCheck(id: ID!): LearningCheck
-    posts(first: Int = 5, after: String): PostConnection!
+    posts(first: Int = 5, after: String, status: PostStatus): PostConnection!
     me: AuthUser
   }
 `);

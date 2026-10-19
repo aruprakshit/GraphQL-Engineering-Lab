@@ -6,6 +6,10 @@
  * | Whitespace and capitalization | Trimmed lowercase username |
  * | Supported characters and length boundaries | Accepted |
  * | Invalid length or unsupported characters | Throws |
+ *
+ * Reading guide:
+ * - Username normalization is intentional: surrounding whitespace and case are ignored.
+ * - Accepted characters and length boundaries are checked separately from normalization.
  */
 
 import assert from "node:assert/strict";
