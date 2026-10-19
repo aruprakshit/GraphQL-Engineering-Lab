@@ -51,6 +51,7 @@ const query = `
   }
 `;
 
+// Purpose: Run the query through cookie extraction and the same actor helper used by requests.
 test("GraphQL current user", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const databaseName = process.env.TEST_MONGO_DB;
@@ -121,6 +122,7 @@ test("GraphQL current user", async (t) => {
       });
     }
 
+    // Purpose: Return public user data only after the supplied session resolves.
     await t.test("returns public identity for a valid session", async () => {
       const session = await createSession(database, userId);
 
@@ -139,6 +141,7 @@ test("GraphQL current user", async (t) => {
       );
     });
 
+    // Purpose: Lack of a valid session is ordinary anonymous access, not a GraphQL error.
     await t.test(
       "returns null for missing, malformed, or unknown tokens",
       async () => {
@@ -156,6 +159,7 @@ test("GraphQL current user", async (t) => {
       },
     );
 
+    // Purpose: Expiry is checked during lookup, independently of background record deletion.
     await t.test("returns null for an expired session", async () => {
       // CREATE AN ALREADY EXPIRED SESSION WITHOUT WAITING.
       const nineHoursAgo = new Date(Date.now() - 9 * 60 * 60 * 1000);
@@ -167,6 +171,7 @@ test("GraphQL current user", async (t) => {
       assert.equal(result.data?.me, null);
     });
 
+    // Purpose: A previously valid token must stop authenticating after explicit revocation.
     await t.test("returns null for a revoked session", async () => {
       const session = await createSession(database, userId);
 
@@ -178,6 +183,7 @@ test("GraphQL current user", async (t) => {
       assert.equal(result.data?.me, null);
     });
 
+    // Purpose: Fresh request contexts must observe role changes made after session creation.
     await t.test("reads the current role on the next request", async () => {
       const session = await createSession(database, userId);
       const cookie = `session=${session.token}`;
@@ -213,6 +219,7 @@ test("GraphQL current user", async (t) => {
       }
     });
 
+    // Purpose: A session pointing at a deleted account must not establish identity.
     await t.test("returns null when the account is deleted", async () => {
       const session = await createSession(database, userId);
 
@@ -232,6 +239,7 @@ test("GraphQL current user", async (t) => {
       }
     });
 
+    // Purpose: A session pointing at a deleted public user must not establish identity.
     await t.test("returns null when the public user is deleted", async () => {
       const session = await createSession(database, userId);
 
@@ -249,6 +257,7 @@ test("GraphQL current user", async (t) => {
       }
     });
 
+    // Purpose: Operational failure must be distinguishable from a normal anonymous result.
     await t.test(
       "reports authentication storage failure instead of anonymous access",
       async () => {

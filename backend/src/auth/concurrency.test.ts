@@ -20,6 +20,7 @@ import {
   createConcurrencyLimiter,
 } from "./concurrency.js";
 
+// Purpose: Hold both slots open so rejection proves excess work never starts.
 test("rejects excess work and releases completed slots", async () => {
   // ARRANGE: KEEP TWO OPERATIONS PENDING
   const limiter = createConcurrencyLimiter(2);
@@ -55,6 +56,7 @@ test("rejects excess work and releases completed slots", async () => {
   assert.equal(await limiter.run(async () => "available"), "available");
 });
 
+// Purpose: A rejected async operation must not permanently occupy its slot.
 test("releases a slot after asynchronous failure", async () => {
   // ARRANGE
   const limiter = createConcurrencyLimiter(1);
@@ -70,6 +72,7 @@ test("releases a slot after asynchronous failure", async () => {
   assert.equal(await limiter.run(async () => "available"), "available");
 });
 
+// Purpose: A throw before a Promise is returned must still release capacity.
 test("releases a slot when work throws synchronously", async () => {
   const limiter = createConcurrencyLimiter(1);
 
@@ -83,6 +86,7 @@ test("releases a slot when work throws synchronously", async () => {
   assert.equal(await limiter.run(async () => "available"), "available");
 });
 
+// Purpose: Reject unusable limits before accepting any work.
 test("rejects invalid concurrency limits", () => {
   for (const limit of [0, -1, 1.5, NaN, Infinity]) {
     assert.throws(() => createConcurrencyLimiter(limit));

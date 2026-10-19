@@ -79,5 +79,6 @@ export const schema = buildSchema(/* GraphQL */ `
     learningCheck(id: ID!): LearningCheck
     posts(first: Int = 5, after: String, status: PostStatus): PostConnection!
     me: AuthUser
+    post(id: ID!): Post
   }
 `);

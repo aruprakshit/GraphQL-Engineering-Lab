@@ -25,6 +25,7 @@ import {
   LoginRateLimitError,
 } from "./login-rate-limit.js";
 
+// Purpose: The per-request flag must block a second call even while IP allowance remains.
 test("allows one login attempt per request", () => {
   const beginLogin = createLoginAttemptGuard({
     assertAuthRequest: () => {},
@@ -37,6 +38,7 @@ test("allows one login attempt per request", () => {
   assert.throws(beginLogin, LoginAlreadyAttemptedError);
 });
 
+// Purpose: New request flags must not reset the shared client allowance.
 test("shares the IP allowance across requests and counts extra aliases", () => {
   const rateLimiter = createLoginRateLimiter({ limit: 2 });
 
@@ -58,6 +60,7 @@ test("shares the IP allowance across requests and counts extra aliases", () => {
   assert.throws(secondRequest, LoginRateLimitError);
 });
 
+// Purpose: Bad request metadata must fail before it consumes a legitimate client attempt.
 test("rejects an untrusted request before consuming its allowance", () => {
   const rateLimiter = createLoginRateLimiter({ limit: 1 });
   const rejection = new Error("Request rejected");
@@ -81,6 +84,7 @@ test("rejects an untrusted request before consuming its allowance", () => {
   assert.doesNotThrow(acceptedRequest);
 });
 
+// Purpose: Missing client identity must fail closed instead of sharing an invented IP.
 test("rejects login when the client address is unavailable", () => {
   const beginLogin = createLoginAttemptGuard({
     assertAuthRequest: () => {},

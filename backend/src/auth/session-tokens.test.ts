@@ -20,6 +20,7 @@ import {
   isSessionToken,
 } from "./session-tokens.js";
 
+// Purpose: Check format and distinct generated values without asserting a predictable token.
 test("generates valid distinct session tokens", () => {
   // ACT
   const first = generateSessionToken();
@@ -32,6 +33,7 @@ test("generates valid distinct session tokens", () => {
   assert.notEqual(first, second);
 });
 
+// Purpose: The lookup hash is deterministic but must differ from the client-facing token.
 test("hashes a token consistently without returning the raw token", () => {
   // ARRANGE
   const token = generateSessionToken();
@@ -46,6 +48,7 @@ test("hashes a token consistently without returning the raw token", () => {
   assert.notEqual(hash, token);
 });
 
+// Purpose: Reject wrong types, lengths, case, whitespace, and non-hex characters.
 test("rejects malformed token inputs", () => {
   // ARRANGE
   const invalidInputs: unknown[] = [

@@ -7,6 +7,7 @@ import { resolveLogout } from "./logout.js";
 import { resolveCreateDraft } from "./create-draft.js";
 import { resolveUpdatePost } from "./update-post.js";
 import { resolvePublishPost } from "./publish-post.js";
+import { resolveFindPost } from "./find-post.js";
 
 export const rootValue = {
   hello: resolveHello,
@@ -18,4 +19,5 @@ export const rootValue = {
   createDraft: resolveCreateDraft,
   updatePost: resolveUpdatePost,
   publishPost: resolvePublishPost,
+  post: resolveFindPost,
 };

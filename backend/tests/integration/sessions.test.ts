@@ -37,6 +37,7 @@ import {
   revokeSession,
 } from "../../src/auth/sessions.js";
 
+// Purpose: Verify stored hash, absolute lifetime, and actor resolution before testing invalidation.
 test("creates a hashed session with eight-hour expiry and resolves its actor", async (t) => {
   // 1. ARRANGE: REQUIRE THE DEDICATED TEST DATABASE
   const url = process.env.TEST_MONGO_URL;
@@ -109,6 +110,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       role: "user",
     });
 
+    // Purpose: Malformed and unknown tokens must not resolve to an identity.
     await t.test("rejects unknown and malformed tokens", async () => {
       // ACT AND ASSERT
       assert.equal(
@@ -120,6 +122,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       assert.equal(await resolveSession(database, undefined, now), null);
     });
 
+    // Purpose: Advance the lookup time without waiting for TTL cleanup; the record may still exist.
     await t.test("enforces expiry without waiting for cleanup", async () => {
       // ARRANGE
       const session = await createSession(database, userId, now);
@@ -148,6 +151,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       );
     });
 
+    // Purpose: Deleting one session twice must leave the other session usable.
     await t.test("revokes one session without affecting another", async () => {
       // ARRANGE
       const first = await createSession(database, userId, now);
@@ -175,6 +179,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       );
     });
 
+    // Purpose: Session resolution must use current account authority rather than a login-time role.
     await t.test("reads the current account role", async () => {
       // ARRANGE
       const session = await createSession(database, userId, now);
@@ -197,6 +202,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       }
     });
 
+    // Purpose: A deleted public user invalidates identity and prevents new session creation.
     await t.test("rejects a session whose public user is missing", async () => {
       // ARRANGE
       const session = await createSession(database, userId, now);
@@ -222,6 +228,7 @@ test("creates a hashed session with eight-hour expiry and resolves its actor", a
       }
     });
 
+    // Purpose: A deleted private account invalidates identity and prevents new session creation.
     await t.test("rejects a session whose account is missing", async () => {
       // ARRANGE
       const session = await createSession(database, userId, now);

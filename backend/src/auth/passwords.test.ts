@@ -19,11 +19,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { hashPassword, verifyPassword } from "./passwords.js";
 
+// Purpose: Share one valid hash while testing verification, record validation, and password boundaries.
 test("password hashing and verification", async (t) => {
   // ARRANGE: HASH ONE VALID PASSWORD FOR THE VERIFICATION CASES
   const password = "A long learning password!";
   const stored = await hashPassword(password);
 
+  // Purpose: Successful verification checks the supplied password against its stored salt and parameters.
   await t.test("accepts the correct password", async () => {
     // ACT
     const matches = await verifyPassword(password, stored);
@@ -32,6 +34,7 @@ test("password hashing and verification", async (t) => {
     assert.equal(matches, true);
   });
 
+  // Purpose: A well-formed but wrong password must return false rather than authenticate.
   await t.test("rejects an incorrect password", async () => {
     // ACT
     const matches = await verifyPassword(
@@ -43,6 +46,7 @@ test("password hashing and verification", async (t) => {
     assert.equal(matches, false);
   });
 
+  // Purpose: Trimming would change the secret; only the original whitespace must verify.
   await t.test("preserves password whitespace", async () => {
     // ARRANGE
     const spacedPassword = "  A long learning password!  ";
@@ -56,6 +60,7 @@ test("password hashing and verification", async (t) => {
     );
   });
 
+  // Purpose: Two hashes of one password should differ while both remain verifiable.
   await t.test("uses a fresh salt for the same password", async () => {
     // ACT
     const secondRecord = await hashPassword(password);
@@ -66,6 +71,7 @@ test("password hashing and verification", async (t) => {
     assert.equal(await verifyPassword(password, secondRecord), true);
   });
 
+  // Purpose: Reject corrupt records and unsafe parameters before attempting expensive work.
   await t.test("rejects malformed stored credentials", async () => {
     // ARRANGE
     // Treat stored records as untrusted input, including unsupported hashing parameters.
@@ -89,6 +95,7 @@ test("password hashing and verification", async (t) => {
     }
   });
 
+  // Purpose: Hash creation rejects bad input; verification returns false for the tested short password.
   await t.test("rejects passwords outside the input limits", async () => {
     // ACT AND ASSERT
     await assert.rejects(hashPassword("short"), /15 and 128/);

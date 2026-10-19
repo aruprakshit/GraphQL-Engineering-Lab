@@ -21,6 +21,7 @@ import { test } from "node:test";
 import express from "express";
 import { setSessionCookie, clearSessionCookie } from "./cookies.js";
 
+// Purpose: Use real HTTP responses to verify cookie issuance and removal together.
 test("session cookie settings", async (t) => {
   // 1. ARRANGE: USE A SYNTHETIC SESSION AND TEMPORARY SERVER
   const session = {
@@ -76,6 +77,7 @@ test("session cookie settings", async (t) => {
   const baseUrl = `http://127.0.0.1:${address.port}`;
 
   for (const environment of ["development", "production"]) {
+    // Purpose: Inspect attributes in each environment; only production should require Secure.
     await t.test(`${environment} cookie attributes`, async () => {
       // 2. ACT
       const response = await fetch(`${baseUrl}/${environment}`);
@@ -103,6 +105,7 @@ test("session cookie settings", async (t) => {
   }
 
   for (const environment of ["development", "production"]) {
+    // Purpose: Deletion must target the same cookie scope with an empty value and past expiry.
     await t.test(`${environment} clears the session cookie`, async () => {
       const response = await fetch(`${baseUrl}/clear/${environment}`);
       const cookie = response.headers.get("set-cookie");

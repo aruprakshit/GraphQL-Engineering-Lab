@@ -90,6 +90,22 @@ export async function listVisiblePosts(
   };
 }
 
+export async function findVisiblePost(
+  database: Db,
+  actor: Actor | null,
+  id: string,
+): Promise<PostDocument | null> {
+  if (typeof id !== "string" || id.length === 0 || id.length > 256) {
+    throw new InvalidPostIdError();
+  }
+
+  const filter: Filter<PostDocument> = {
+    $and: [{ _id: id }, buildPostVisibilityFilter(actor)],
+  };
+
+  return database.collection<PostDocument>("posts").findOne(filter);
+}
+
 export async function createDraft(
   database: Db,
   actor: Actor | null,

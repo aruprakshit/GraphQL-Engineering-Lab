@@ -24,6 +24,7 @@ import {
   LoginRateLimitError,
 } from "./login-rate-limit.js";
 
+// Purpose: Use an injected clock to distinguish active windows from the exact expiry boundary.
 test("limits each key independently and resets at expiry", () => {
   // ARRANGE
   let time = 0;
@@ -58,6 +59,7 @@ test("limits each key independently and resets at expiry", () => {
   assert.doesNotThrow(() => limiter.consume("client-a"));
 });
 
+// Purpose: New client keys must fail at capacity until expired entries can be reclaimed.
 test("bounds storage and reclaims expired windows", () => {
   let time = 0;
 
@@ -76,6 +78,7 @@ test("bounds storage and reclaims expired windows", () => {
   assert.doesNotThrow(() => limiter.consume("client-b"));
 });
 
+// Purpose: Configuration errors should fail during limiter creation, not during login.
 test("rejects invalid settings", () => {
   assert.throws(() => createLoginRateLimiter({ limit: 0 }));
   assert.throws(() => createLoginRateLimiter({ windowMs: -1 }));

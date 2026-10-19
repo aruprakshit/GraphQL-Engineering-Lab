@@ -23,6 +23,7 @@ import {
 
 const allowedOrigin = "http://localhost:4000";
 
+// Purpose: The configured browser origin is accepted only with the intended method and header.
 test("accepts the configured browser origin", () => {
   const guard = createAuthRequestGuard(allowedOrigin);
 
@@ -35,12 +36,14 @@ test("accepts the configured browser origin", () => {
   );
 });
 
+// Purpose: A CLI may omit Origin but must still send the required custom header.
 test("accepts CLI requests with the required header", () => {
   const guard = createAuthRequestGuard(allowedOrigin);
 
   assert.doesNotThrow(() => guard({ method: "POST", authHeader: "1" }));
 });
 
+// Purpose: Vary method, header, host, and port to check exact request trust boundaries.
 test("rejects disallowed authentication requests", () => {
   const guard = createAuthRequestGuard(allowedOrigin);
 
@@ -67,6 +70,7 @@ test("rejects disallowed authentication requests", () => {
   }
 });
 
+// Purpose: Reject ambiguous or non-origin configuration before handling requests.
 test("rejects invalid origin configuration", () => {
   for (const origin of [
     "",

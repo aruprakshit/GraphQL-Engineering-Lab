@@ -60,6 +60,7 @@ interface LoginTestOptions {
   database?: GraphQLContext["database"];
 }
 
+// Purpose: Execute the registered GraphQL mutation with real storage and captured cookie side effects.
 test("GraphQL login", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const databaseName = process.env.TEST_MONGO_DB;
@@ -156,6 +157,7 @@ test("GraphQL login", async (t) => {
         .collection<SessionDocument>("sessions")
         .countDocuments({ accountId: userId });
 
+    // Purpose: A successful response requires a persisted hashed session and exactly one issued cookie.
     await t.test("returns identity and issues a stored session", async () => {
       const before = await countSessions();
 
@@ -199,6 +201,7 @@ test("GraphQL login", async (t) => {
       assert.equal(JSON.stringify(result.data).includes(session.token), false);
     });
 
+    // Purpose: Keep public messages identical so callers cannot distinguish unknown accounts.
     await t.test(
       "rejects wrong and unknown credentials identically",
       async () => {
@@ -226,6 +229,7 @@ test("GraphQL login", async (t) => {
       },
     );
 
+    // Purpose: Invalid input must not create a session or issue a cookie.
     await t.test("rejects invalid password input", async () => {
       const before = await countSessions();
 
@@ -240,6 +244,7 @@ test("GraphQL login", async (t) => {
       assert.equal(await countSessions(), before);
     });
 
+    // Purpose: Reject the request before credential verification can produce a session.
     await t.test("rejects a request without the custom header", async () => {
       const before = await countSessions();
 
@@ -254,6 +259,7 @@ test("GraphQL login", async (t) => {
       assert.equal(await countSessions(), before);
     });
 
+    // Purpose: Top-level mutations execute sequentially; the first session survives the rejected alias.
     await t.test(
       "allows only the first login alias to attempt login",
       async () => {
@@ -295,6 +301,7 @@ test("GraphQL login", async (t) => {
         assert.equal(await countSessions(), before + 1);
       },
     );
+    // Purpose: Reuse one limiter across helper calls so attempt counts persist across requests.
     await t.test(
       "shares the login limit across requests from one IP",
       async () => {
@@ -333,6 +340,7 @@ test("GraphQL login", async (t) => {
       },
     );
 
+    // Purpose: Inject capacity exhaustion to test error mapping independently of limiter scheduling.
     await t.test(
       "reports exhausted password verification capacity",
       async () => {
@@ -358,6 +366,7 @@ test("GraphQL login", async (t) => {
         assert.equal(await countSessions(), before);
       },
     );
+    // Purpose: A verified password is not success when session storage fails; no cookie may be issued.
     await t.test(
       "hides session database failures and issues no cookie",
       async () => {

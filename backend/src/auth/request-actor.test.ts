@@ -20,6 +20,7 @@ import { GraphQLError } from "graphql";
 import type { Actor } from "./models.js";
 import { createRequestActor } from "./request-actor.js";
 
+// Purpose: Compare Promise references and call counts to prove one lazy, shared lookup.
 test("resolves lazily and shares one lookup within a request", async () => {
   let calls = 0;
 
@@ -50,6 +51,7 @@ test("resolves lazily and shares one lookup within a request", async () => {
   assert.equal(calls, 1);
 });
 
+// Purpose: Cache null as a completed result rather than repeatedly checking anonymous requests.
 test("also reuses an anonymous result", async () => {
   let calls = 0;
 
@@ -63,6 +65,7 @@ test("also reuses an anonymous result", async () => {
   assert.equal(calls, 1);
 });
 
+// Purpose: Each request needs its own cache so identities cannot leak between requests.
 test("keeps different requests independent", async () => {
   let calls = 0;
 
@@ -80,6 +83,7 @@ test("keeps different requests independent", async () => {
   assert.equal(calls, 2);
 });
 
+// Purpose: A failed lookup remains a failure for all callers; it must never become anonymous.
 test("sanitizes storage failures and reuses the rejection", async () => {
   let calls = 0;
 
@@ -102,6 +106,7 @@ test("sanitizes storage failures and reuses the rejection", async () => {
   assert.equal(calls, 1);
 });
 
+// Purpose: Even a synchronous throw must produce the same sanitized asynchronous failure.
 test("converts synchronous failures into a rejected promise", async () => {
   const getActor = createRequestActor(() => {
     throw new Error("Private internal details");
