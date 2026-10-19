@@ -11,6 +11,11 @@
  * | Requests sharing two-attempt IP allowance | Third request TOO_MANY_REQUESTS with retry delay |
  * | Simulated verification capacity exhaustion | SERVICE_UNAVAILABLE with retry delay; no session or cookie issued |
  * | Closed database during session creation | Generic SERVICE_UNAVAILABLE; no session or cookie issued |
+ *
+ * Reading guide:
+ * - The real GraphQL schema and rootValue must dispatch login to its registered resolver.
+ * - The cookie callback captures issued sessions; separate HTTP tests check cookie attributes.
+ * - Injected failures isolate error mapping, while MongoDB confirms whether sessions were created.
  */
 
 import assert from "node:assert/strict";
@@ -95,6 +100,7 @@ test("GraphQL login", async (t) => {
       authHeader: string | undefined = "1",
       options: LoginTestOptions = {},
     ) {
+      // Capture the cookie side effect without opening an HTTP server or exposing a real token.
       const issuedSessions: CreatedSession[] = [];
 
       const assertAuthRequest = createAuthRequestGuard("http://localhost:4000");
@@ -120,6 +126,7 @@ test("GraphQL login", async (t) => {
               authHeader,
             });
           },
+          // Most cases use independent limits; the IP-limit test explicitly supplies a shared instance.
           rateLimiter: options.rateLimiter ?? createLoginRateLimiter(),
           clientIp: "test-client",
         }),

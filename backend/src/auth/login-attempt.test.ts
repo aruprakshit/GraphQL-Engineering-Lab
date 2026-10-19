@@ -7,6 +7,10 @@
  * | Extra alias and later request share allowance | Alias counts; later request is rate limited |
  * | Request guard rejects | Error propagates without consuming allowance |
  * | Missing client IP | LoginClientUnavailableError |
+ *
+ * Reading guide:
+ * - Each guard represents one request; a shared limiter represents clients across requests.
+ * - Extra login aliases consume allowance even though the request guard rejects them.
  */
 
 import assert from "node:assert/strict";
@@ -48,6 +52,7 @@ test("shares the IP allowance across requests and counts extra aliases", () => {
   firstRequest();
   assert.throws(firstRequest, LoginAlreadyAttemptedError);
 
+  // A new request gets a new attempt flag but retains the shared IP allowance.
   const secondRequest = createRequest();
 
   assert.throws(secondRequest, LoginRateLimitError);

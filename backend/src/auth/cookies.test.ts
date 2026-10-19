@@ -9,6 +9,10 @@
  * | Response caching and body | no-store; JSON contains only ok: true |
  * | Clear development cookie | Empty session value, past expiry, matching scope and attributes without Secure |
  * | Clear production cookie | Same clearing behavior with Secure |
+ *
+ * Reading guide:
+ * - A temporary Express server exercises real HTTP cookie headers in both environments.
+ * - These tests check cookie transport settings, not session storage or password verification.
  */
 
 import assert from "node:assert/strict";
@@ -48,6 +52,7 @@ test("session cookie settings", async (t) => {
 
   const server = app.listen(0, "127.0.0.1");
 
+  // The test runner invokes this cleanup after the test, including assertion failures.
   t.after(async () => {
     server.closeAllConnections();
 

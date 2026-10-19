@@ -9,6 +9,10 @@
  * | Unicode supplementary characters | Counts code points; accepts 200 emoji and rejects 201 |
  * | Empty, whitespace-only, or oversized title | Throws InvalidPostTitleError |
  * | Non-string input | Throws InvalidPostTitleError without coercion |
+ *
+ * Reading guide:
+ * - Only surrounding whitespace is removed; internal formatting stays intact.
+ * - Length is measured after trimming and in Unicode code points, including emoji.
  */
 
 import assert from "node:assert/strict";
@@ -37,6 +41,7 @@ test("applies the length limit after trimming", () => {
 });
 
 test("counts Unicode code points rather than UTF-16 code units", () => {
+  // Each emoji uses two UTF-16 code units but counts as one allowed code point.
   const maximum = "🚀".repeat(200);
 
   assert.equal(normalizePostTitle(maximum), maximum);

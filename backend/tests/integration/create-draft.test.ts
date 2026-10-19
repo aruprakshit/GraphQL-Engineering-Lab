@@ -18,6 +18,11 @@
  * | GraphQL: protected ownership, status, or ID input fields | Rejects variables before resolver execution without inserting |
  * | GraphQL: list newly created drafts | Enforces author and admin visibility |
  * | GraphQL: authentication or write storage fails | Returns generic SERVICE_UNAVAILABLE without inserting |
+ *
+ * Reading guide:
+ * - Direct service tests protect rules even when callers bypass GraphQL input validation.
+ * - Nested GraphQL tests add session identity, request guards, and resolved author fields.
+ * - Document counts before and after rejected operations prove nothing was inserted.
  */
 
 import assert from "node:assert/strict";
@@ -70,6 +75,7 @@ test("draft creation service", async (t) => {
     await client.connect();
 
     await t.test("creates a normalized draft owned by the actor", async () => {
+      // Compare counts around the operation to detect a missing or unexpected insert.
       const before = await posts.countDocuments();
 
       const created = await createDraft(database, ada, {

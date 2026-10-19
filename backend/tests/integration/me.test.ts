@@ -11,6 +11,10 @@
  * | Session account is deleted | Returns me: null |
  * | Public user is deleted | Returns me: null |
  * | Authentication storage fails | Returns SERVICE_UNAVAILABLE at me instead of anonymous access |
+ *
+ * Reading guide:
+ * - Each helper call builds a fresh request context from an incoming cookie.
+ * - The real session service supplies current identity; unrelated mutation helpers must stay unused.
  */
 
 import assert from "node:assert/strict";
@@ -84,6 +88,7 @@ test("GraphQL current user", async (t) => {
       cookieHeader?: string,
       requestDatabase = database,
     ) {
+      // Follow the same cookie extraction path as the application before resolving identity.
       const token = readSessionCookie(cookieHeader);
 
       const unexpectedLoginCall = (): never => {

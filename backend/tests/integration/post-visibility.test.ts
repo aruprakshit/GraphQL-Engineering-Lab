@@ -14,6 +14,20 @@
  * | GraphQL: anonymous, author, and admin sessions | Returns authorized posts with matching author names, encoded cursors, and pageInfo |
  * | GraphQL: author requests consecutive pages | Preserves encoded cursors and correct pageInfo across authorized pages |
  * | GraphQL: authentication storage fails | Returns generic SERVICE_UNAVAILABLE at posts and data: null; no anonymous fallback |
+ * | Service: draft or published status filter | Narrows the authorized set for anonymous callers, authors, and admins without exposing hidden drafts |
+ * | Service: omitted or null status | Preserves unfiltered visibility for every caller role |
+ * | Service: draft-filtered pagination | Returns only matching authorized drafts with correct hasNextPage and an empty final page |
+ * | Service: published-filtered pagination | Ignores intervening and trailing drafts when filling pages and computing hasNextPage |
+ * | Service: unsupported runtime status | Throws InvalidPostStatusError before any database query |
+ * | GraphQL: DRAFT or PUBLISHED enum filter | Maps enum values correctly, returns matching status fields, and preserves authorization |
+ * | GraphQL: omitted or null status | Returns each caller's unfiltered authorized set |
+ * | GraphQL: filtered pagination | Returns matching visible posts with correct cursors and pageInfo, including the empty final page |
+ * | GraphQL: invalid enum input | Returns validation errors and no data before execution |
+ *
+ * Reading guide:
+ * - Service tests establish visibility first; nested GraphQL tests verify session and enum wiring.
+ * - Interleaved author drafts expose mistakes that filter only after pagination.
+ * - A unique database keeps page contents independent of fixtures from other suites.
  */
 
 import assert from "node:assert/strict";
@@ -676,6 +690,7 @@ test("post service visibility and pagination", async (t) => {
     await t.test(
       "status filters narrow the authorized result set",
       async () => {
+        // Run the same filter against different identities; filtering must never widen permissions.
         const scenarios: {
           actor: Actor | null;
           status: PostDocument["status"];

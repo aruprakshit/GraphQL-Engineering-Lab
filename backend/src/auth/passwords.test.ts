@@ -9,6 +9,10 @@
  * | Same password hashed twice | Fresh salts and hashes; both verify |
  * | Malformed credentials or unsupported parameters | Returns false |
  * | Tested password length limits | Hashing rejects; short-password verification returns false |
+ *
+ * Reading guide:
+ * - The suite hashes a shared fixture once, then varies passwords or stored records.
+ * - Password whitespace is significant; invalid stored parameters must not trigger costly hashing.
  */
 
 import assert from "node:assert/strict";
@@ -64,6 +68,7 @@ test("password hashing and verification", async (t) => {
 
   await t.test("rejects malformed stored credentials", async () => {
     // ARRANGE
+    // Treat stored records as untrusted input, including unsupported hashing parameters.
     const malformedRecords: unknown[] = [
       null,
       {},

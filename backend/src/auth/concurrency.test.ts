@@ -7,6 +7,10 @@
  * | Work completes | Slot becomes available |
  * | Asynchronous or synchronous failure | Error propagates; slot released |
  * | Invalid limit | Creation throws |
+ *
+ * Reading guide:
+ * - The pending Promise deliberately holds worker slots until release() is called.
+ * - A rejection must leave capacity available for later work; no sleeps are needed.
  */
 
 import assert from "node:assert/strict";
@@ -21,6 +25,7 @@ test("rejects excess work and releases completed slots", async () => {
   const limiter = createConcurrencyLimiter(2);
 
   let release!: () => void;
+  // Keep work unfinished so the next call encounters a genuinely full limiter.
   const pending = new Promise<void>((resolve) => {
     release = resolve;
   });
@@ -41,6 +46,7 @@ test("rejects excess work and releases completed slots", async () => {
 
     assert.equal(excessWorkStarted, false);
   } finally {
+    // Always unblock the pending work, even when an assertion fails.
     release();
     await Promise.all([first, second]);
   }

@@ -9,6 +9,10 @@
  * | Role changes | Returns current role |
  * | Missing public user | Returns null |
  * | Verification alone | Creates no sessions |
+ *
+ * Reading guide:
+ * - Real account fixtures exercise password verification against the isolated test database.
+ * - Verification returns identity only; creating sessions belongs to the login flow.
  */
 
 import assert from "node:assert/strict";
@@ -56,6 +60,7 @@ test("credential verification", async (t) => {
       password: await hashPassword(password),
     });
 
+    // Initialize once for the suite, as startup does for the running application.
     const verifyCredentials = await createCredentialVerifier(database);
 
     await t.test("returns only identity for valid credentials", async () => {

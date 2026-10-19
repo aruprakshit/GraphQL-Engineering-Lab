@@ -8,6 +8,10 @@
  * | Separate requests resolve identity | Each request performs its own lookup |
  * | Authentication storage fails | Returns generic SERVICE_UNAVAILABLE and reuses the rejection |
  * | Resolver throws synchronously | Converts failure into a sanitized rejected promise |
+ *
+ * Reading guide:
+ * - The injected resolver lets call counts prove lazy lookup and per-request caching.
+ * - Both successful results and failures must be shared within one request.
  */
 
 import assert from "node:assert/strict";
@@ -34,6 +38,7 @@ test("resolves lazily and shares one lookup within a request", async () => {
   const first = getActor();
   const second = getActor();
 
+  // Promise identity proves concurrent callers share the same in-flight lookup.
   assert.equal(first, second);
 
   const results = await Promise.all([first, second]);
@@ -90,6 +95,7 @@ test("sanitizes storage failures and reuses the rejection", async () => {
     return true;
   };
 
+  // The Promise must reject; returning null would incorrectly claim anonymous access.
   await assert.rejects(getActor(), assertUnavailable);
   await assert.rejects(getActor(), assertUnavailable);
 

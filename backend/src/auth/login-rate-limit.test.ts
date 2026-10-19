@@ -10,6 +10,10 @@
  * | Storage full with active entries | LoginRateLimitCapacityError for new key |
  * | Expired entries at storage capacity | Reclaimed; new key accepted |
  * | Invalid settings | Creation throws |
+ *
+ * Reading guide:
+ * - The injected clock makes window boundaries deterministic without waiting in real time.
+ * - Attempt allowance and bounded key storage are separate rejection paths.
  */
 
 import assert from "node:assert/strict";
@@ -39,6 +43,7 @@ test("limits each key independently and resets at expiry", () => {
 
   assert.doesNotThrow(() => limiter.consume("client-b"));
 
+  // One millisecond remains; the public retry delay rounds up to one second.
   time = 999;
 
   assert.throws(
@@ -47,6 +52,7 @@ test("limits each key independently and resets at expiry", () => {
       error instanceof LoginRateLimitError && error.retryAfterSeconds === 1,
   );
 
+  // At the exact boundary the old window expires; no real-time sleep is involved.
   time = 1000;
 
   assert.doesNotThrow(() => limiter.consume("client-a"));
