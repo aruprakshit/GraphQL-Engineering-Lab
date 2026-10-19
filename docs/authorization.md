@@ -1,18 +1,17 @@
 # Authorization design
 
-Session authentication, post-list visibility, draft creation, title editing, and
-publication are implemented. Post services enforce visibility before pagination,
-assign trusted ownership, and restrict edits and publication to authors or admins.
-Publication also requires an atomic draft-to-published state transition.
+Session authentication, post-list visibility, draft creation, title editing,
+publication, and post-status filtering are implemented. Post services enforce
+visibility before pagination, assign trusted ownership, and restrict edits and
+publication to authors or admins. Publication requires an atomic state transition.
 
-The earlier draft-creation and editing feature PRs have merged. Publication now
-has service and GraphQL integration coverage; run the verification commands below
-and confirm CI before merging this checkpoint. Adding test code does not by itself
-establish a passing run.
+The publication feature PR has merged. The current status-filtering feature adds
+service and GraphQL coverage, including status output from post mutations. Run the
+verification commands below and confirm CI before merging; test code alone does
+not establish a passing run.
 
-Single-post lookup remains planned. The next agreed feature after publication is
-an optional post-status filter and a public Post.status enum field; neither is
-implemented yet.
+Single-post lookup remains planned. Unpublishing, deletion, and ownership transfer
+are outside the current implementation.
 
 ## Implementation status
 
@@ -28,7 +27,7 @@ implemented yet.
 | Draft creation with trusted ownership and initial status | Implemented; automated coverage added |
 | Author/admin title editing with ownership in the update filter | Implemented; automated coverage added |
 | Author/admin publication with atomic draft-state condition | Implemented; automated coverage added |
-| Public post status and status-filtered lists | Planned next after publication |
+| Public post status and authorization-aware status-filtered lists | Implemented; automated coverage added |
 
 See [session authentication](authentication/README.md) for the identity lifecycle.
 
@@ -163,14 +162,15 @@ extend type Mutation {
 ```
 
 The field is nullable so creation failures can return `createDraft: null` with an
-error path. The existing `Post` output exposes `id`, `title`, and `author`; stored
-status is not currently a public Post field.
+error path. The shared `Post` output exposes `id`, `title`, `status`, and `author`.
+Creation returns `status: DRAFT`; the stored document retains lowercase `draft`.
 
 ```graphql
 mutation CreateDraft($input: CreateDraftInput!) {
   createDraft(input: $input) {
     id
     title
+    status
     author {
       id
       name
@@ -335,6 +335,7 @@ mutation UpdatePost($id: ID!, $input: UpdatePostInput!) {
   updatePost(id: $id, input: $input) {
     id
     title
+    status
     author {
       id
       name
@@ -503,6 +504,7 @@ mutation PublishPost($id: ID!) {
   publishPost(id: $id) {
     id
     title
+    status
     author {
       id
       name
@@ -523,10 +525,10 @@ Use a login session cookie and `X-GraphQL-Auth: 1`. The server controls the stat
 transition; clients supply only the post ID. The field is nullable so execution
 failure can produce `publishPost: null` with its error path.
 
-`Post` currently exposes ID, title, and author, without a public status field.
-Publication can be checked through anonymous list visibility, persisted status,
-and a conflict on a repeated attempt. UUID sorting is lexicographic rather than
-chronological; a published post may require pagination to locate.
+The shared `Post` output includes `status`, so publication can return
+`status: PUBLISHED`. Anonymous list visibility and a conflict on a repeated attempt
+also confirm the transition. UUID sorting is lexicographic rather than chronological;
+a published post may require pagination to locate.
 
 ### Service contract and atomic update
 
@@ -649,7 +651,8 @@ flowchart TD
     RESULT -->|No| ERROR["SERVICE_UNAVAILABLE; no anonymous fallback"]
     RESULT -->|Yes: actor or null| SERVICE["listVisiblePosts validates service inputs"]
     SERVICE --> FILTER["Build MongoDB visibility filter"]
-    FILTER --> CURSOR["Combine with cursor boundary using AND"]
+    FILTER --> STATUS["Add optional requested status using AND"]
+    STATUS --> CURSOR["Combine with cursor boundary using AND"]
     CURSOR --> ORDER["Sort by _id ascending"]
     ORDER --> LIMIT["Fetch page size plus one visible documents"]
     LIMIT --> PAGE["Trim page and calculate hasNextPage"]
@@ -677,14 +680,16 @@ at that position; guessing a draft's ID does not grant access to it.
 ### Service contract and boundaries
 
 ```typescript
-listVisiblePosts(database, actor, { pageSize, afterId }, logDatabaseCall?)
+listVisiblePosts(database, actor, { pageSize, afterId, status? }, logDatabaseCall?)
 // Promise<{ posts: PostDocument[]; hasNextPage: boolean }>
 ```
 
 The service accepts a trusted `Actor | null` and decoded pagination values.
 It independently validates an integer page size from 1 to 20 and an `afterId`
 that is either null or a nonempty string of at most 256 characters. This protects
-bounds even when another entry point calls it without GraphQL validation.
+bounds even when another entry point calls it without GraphQL validation. Optional
+status accepts lowercase `draft` or `published`; undefined and null add no status
+constraint. Other runtime values throw `InvalidPostStatusError` before querying.
 
 The service has no dependency on GraphQL, Express, cookies, or request context.
 Database errors propagate to its caller. GraphQL validates and decodes the public
@@ -728,7 +733,8 @@ Paths are relative to `backend/`.
 
 | File | Responsibility |
 | --- | --- |
-| `src/posts/visibility.ts` | Build actor-dependent visibility filters |
+| src/posts/visibility.ts | Build actor-dependent visibility filters |
+| src/post-status.ts | Explicit GraphQL enum and stored-status mapping |
 | `src/posts/service.ts` | Validate bounds and return visible pages; also create authenticated drafts |
 | src/resolvers/posts.ts | Validate GraphQL arguments, get actor, call service, map connection, trace |
 | src/resolvers/post.ts | Shared post mapping and DataLoader author resolution |
@@ -789,15 +795,146 @@ Single-post lookup remains future work.
 | Author or admin requests a draft by ID | Allowed |
 | Future entry point invokes a post service | Same policy enforced using explicitly established identity |
 
-## Next agreed feature: post-status filtering
+## Post-status exposure and filtering (implemented)
 
-After the publication feature merges, create a separate ticket to add a public
-`PostStatus` enum, `Post.status`, and an optional status argument on `posts`.
+### Schema and mapping
 
-Combine the requested status with authorization and cursor conditions before
-pagination. With a draft filter, anonymous callers see no drafts, ordinary users
-see only their own drafts, and admins see all drafts. Follow cursors to retrieve
-all matching records; the existing page-size bound still applies.
+```graphql
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+}
 
-This is planned work, not part of the publication mutation implementation.
-Unpublishing, deletion, and ownership transfer are also outside the current scope.
+type Post {
+  id: ID!
+  title: String!
+  status: PostStatus!
+  author: User
+}
+
+extend type Query {
+  posts(first: Int = 5, after: String, status: PostStatus): PostConnection!
+}
+```
+
+The query declaration illustrates the current field signature; update the existing
+`posts` field rather than defining a duplicate field in an executable schema.
+
+| GraphQL value | Stored/service value |
+| --- | --- |
+| DRAFT | `draft` |
+| PUBLISHED | `published` |
+| Omitted or null status argument | No additional status constraint |
+
+`fromGraphQLPostStatus` explicitly maps input values before actor lookup.
+`toGraphQLPostStatus` maps stored values in the shared post mapper. It rejects an
+unexpected stored status instead of silently treating it as published. Invalid
+GraphQL enum values are rejected before resolver execution; direct service callers
+also receive runtime status validation.
+
+Existing clients can omit the argument and need not select the new status field.
+Their result selection and visibility policy remain unchanged.
+
+### Filtered query
+
+```graphql
+query DraftPosts($after: String) {
+  posts(first: 5, after: $after, status: DRAFT) {
+    edges {
+      cursor
+      node {
+        id
+        title
+        status
+        author {
+          name
+        }
+      }
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+}
+```
+
+Start with `{ "after": null }`. Follow `endCursor` while `hasNextPage` is true,
+keeping the same status filter. Use `status: PUBLISHED` for published posts.
+Listing all matching drafts requires following pages; the existing 20-post maximum
+per page remains in force.
+
+| Caller | DRAFT filter | PUBLISHED filter | Omitted or null filter |
+| --- | --- | --- | --- |
+| Anonymous | Empty result | Published posts | Published posts |
+| Ordinary user | Own drafts only | Published posts | Published posts and own drafts |
+| Admin | All drafts | Published posts | All posts |
+
+Anonymous draft queries return empty edges, `hasNextPage: false`, and
+`endCursor: null`, without an authorization error. Filtering restricts the visible
+set; it never grants permission.
+
+### Combining constraints before pagination
+
+```mermaid
+flowchart TD
+    INPUT["GraphQL enum input"] --> MAP["Map to stored status or no filter"]
+    MAP --> ACTOR["Resolve trusted session actor"]
+    ACTOR --> SERVICE["Service validates pagination and optional status"]
+    SERVICE --> AND["AND: visibility, optional status, optional cursor"]
+    AND --> FETCH["Sort by _id and fetch page size plus one"]
+    FETCH --> RESULT["Return matching visible page and metadata"]
+```
+
+The service always includes the actor's visibility filter. For an anonymous draft
+query, the filter contains both published visibility and requested draft status:
+
+```typescript
+{
+  $and: [
+    { status: "published" },
+    { status: "draft" },
+  ],
+}
+```
+
+These conditions cannot match the same post, so no drafts are disclosed. With a
+cursor, `{ _id: { $gt: afterId } }` is another AND condition. The service sorts and
+limits only the resulting authorized, status-matching set. Hidden drafts and posts
+of the other status cannot consume page slots or imply another matching page.
+
+The cursor remains the encoded post ID; it does not bind the actor or status.
+Clients must retain the same filter when continuing a result set. Changing status
+while reusing a cursor applies that position to a different filtered set; it is not
+a continuation of the original list. Concurrent edits/publication can also change
+membership between requests; pagination is not a database snapshot.
+
+### Mutation output and coverage
+
+The shared `toGraphQLPost` mapper is used by listing, creation, editing, and
+publication. Selecting status on mutations returns:
+
+| Mutation | Returned status |
+| --- | --- |
+| createDraft | DRAFT |
+| updatePost | Existing status, unchanged by title editing |
+| publishPost | PUBLISHED |
+
+The enum field is output-only for these mutations: creation still assigns draft
+status, editing still accepts only a title, and publication controls its own
+transition. Exposing status does not permit clients to set arbitrary state.
+
+Service coverage tests every caller category with draft and published filters,
+omitted/null behavior, filtered pagination, empty results, and invalid runtime
+status values. GraphQL coverage checks the enum mapping, caller visibility matrix,
+filter-specific cursors/page metadata, and invalid enum rejection. Mutation tests
+request status and assert the correct uppercase response values while retaining
+lowercase stored-document assertions.
+
+The existing GraphQL tests without status selections remain to verify compatibility.
+Test files are `tests/integration/post-visibility.test.ts`,
+`tests/integration/create-draft.test.ts`, `tests/integration/update-post.test.ts`,
+and `tests/integration/publish-post.test.ts`, relative to `backend/`.
+
+The feature adds no index migration or query-plan guarantee. Query performance for
+the combined filters should be measured separately before adding indexes.
