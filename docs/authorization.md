@@ -1,17 +1,15 @@
 # Authorization design
 
-Session authentication, post-list visibility, draft creation, title editing,
-publication, and post-status filtering are implemented. Post services enforce
-visibility before pagination, assign trusted ownership, and restrict edits and
-publication to authors or admins. Publication requires an atomic state transition.
+Session authentication, authorized post lists and single-post reads, draft creation,
+title editing, publication, and post-status filtering are implemented. Both read
+paths share the same visibility policy. Write services enforce trusted ownership,
+author/admin permissions, and the publication state transition.
 
-The publication feature PR has merged. The current status-filtering feature adds
-service and GraphQL coverage, including status output from post mutations. Run the
-verification commands below and confirm CI before merging; test code alone does
-not establish a passing run.
+The status-filtering feature PR has merged. Single-post lookup now has service and
+GraphQL integration coverage. Run the verification commands below and confirm CI
+before merging this checkpoint; adding tests alone does not confirm a passing run.
 
-Single-post lookup remains planned. Unpublishing, deletion, and ownership transfer
-are outside the current implementation.
+Unpublishing, deletion, and ownership transfer remain outside the current scope.
 
 ## Implementation status
 
@@ -23,7 +21,7 @@ are outside the current implementation.
 | All posts for admins | Implemented and tested |
 | Visibility filtering before cursor pagination | Implemented and tested |
 | Authentication-storage failure without anonymous fallback | Implemented and tested |
-| Single-post lookup | Planned |
+| Single-post lookup using shared visibility policy | Implemented; automated coverage added |
 | Draft creation with trusted ownership and initial status | Implemented; automated coverage added |
 | Author/admin title editing with ownership in the update filter | Implemented; automated coverage added |
 | Author/admin publication with atomic draft-state condition | Implemented; automated coverage added |
@@ -94,31 +92,152 @@ Calling from an internal entry point does not automatically grant access.
 
 GraphQL arguments cannot establish or override the actor's identity.
 
-## Reading a single post (planned)
+## Reading a single post (implemented)
 
 ```mermaid
-flowchart TD
-    START["Request a post"] --> LOAD["Load the post"]
-    LOAD --> EXISTS{"Post exists?"}
-    EXISTS -->|No| MISSING["Return not found"]
-    EXISTS -->|Yes| PUBLIC{"Published?"}
+sequenceDiagram
+    participant C as Client
+    participant G as GraphQL resolver
+    participant A as Session authentication
+    participant S as Post service
+    participant D as MongoDB
 
-    PUBLIC -->|Yes| ALLOW["Return public post fields"]
-    PUBLIC -->|No: draft| AUTH{"Authenticated actor?"}
-
-    AUTH -->|No| DENY["Deny access"]
-    AUTH -->|Yes| ADMIN{"Admin?"}
-    ADMIN -->|Yes| ALLOW
-    ADMIN -->|No| OWNER{"Actor owns this post?"}
-    OWNER -->|Yes| ALLOW
-    OWNER -->|No| DENY
+    C->>G: Query post by ID
+    G->>A: context.getActor()
+    A-->>G: Trusted actor or null
+    G->>S: findVisiblePost with actor and ID
+    S->>S: Validate ID
+    S->>D: Find by ID AND shared visibility filter
+    alt Missing or inaccessible
+        D-->>S: null
+        S-->>G: null
+        G-->>C: post is null, without an error
+    else Visible post
+        D-->>S: Post document
+        S-->>G: Visible post
+        G->>G: Map status and resolve requested author through DataLoader
+        G-->>C: Selected public post fields
+    end
 ```
 
-Published posts are publicly readable.
-Drafts are readable only by their author or an admin.
+Authentication failures stop the query before post lookup and propagate as errors,
+not anonymous fallback. Invalid IDs also produce an error rather than a normal
+not-found result.
 
-The client-visible response for an inaccessible private post will
-be chosen during implementation to avoid exposing its existence.
+### GraphQL contract
+
+```graphql
+extend type Query {
+  post(id: ID!): Post
+}
+```
+
+```graphql
+query FindPost($id: ID!) {
+  post(id: $id) {
+    id
+    title
+    status
+    author {
+      id
+      name
+    }
+  }
+}
+```
+
+Example variables:
+
+```json
+{
+  "id": "replace-with-an-existing-post-id"
+}
+```
+
+This is a read operation. It does not invoke the mutation request guard or require
+`X-GraphQL-Auth: 1`. The browser sends any existing session cookie; without a valid
+session, published posts remain publicly readable. Invalid or expired sessions do
+not grant access to drafts.
+
+| Caller | Published post | Own draft | Another author's draft |
+| --- | --- | --- | --- |
+| Anonymous | Post | Not applicable | null |
+| Ordinary user | Post | Post | null |
+| Admin | Post | Post | Post |
+
+Any caller receives null for a missing post. Missing and inaccessible posts both
+return `post: null` without an error, so this response does not explicitly confirm
+that another author's private post exists. This differs from editing and publication,
+which use NOT_FOUND errors for missing or inaccessible write targets.
+
+### Service contract and visibility
+
+```typescript
+findVisiblePost(database, actor, id)
+// Promise<PostDocument | null>
+```
+
+The service accepts a trusted `Actor | null`, validates a nonempty ID of at most
+256 characters without trimming, and calls `findOne` with:
+
+```typescript
+{
+  $and: [
+    { _id: id },
+    buildPostVisibilityFilter(actor),
+  ],
+}
+```
+
+The same visibility builder protects list and object reads. There is no separate
+unrestricted load followed by a resolver-only permission check. Calling the service
+from another entry point still requires explicitly established identity.
+
+The service returns a stored document or null and propagates database errors.
+The resolver uses the shared post mapper for uppercase status values and lazy
+DataLoader author resolution. ID validation happens in the service after the
+resolver obtains the actor; no post lookup occurs for an invalid ID.
+
+### Error and partial-data behavior
+
+| Situation | Result |
+| --- | --- |
+| Missing or inaccessible post | post: null; no error |
+| Invalid ID | BAD_USER_INPUT at post |
+| Authentication storage fails | SERVICE_UNAVAILABLE with the existing authentication error |
+| Post lookup fails | SERVICE_UNAVAILABLE with generic Post temporarily unavailable message |
+
+Authentication lookup remains outside the resolver's post-database catch block.
+A storage failure is never converted to an ordinary null result.
+
+Since the root post field is nullable, an error there can leave unrelated root
+fields intact. A query selecting both hello and post can return hello, post: null,
+and an error path of ["post"]. This contrasts with the non-null posts connection,
+whose root execution failure propagates to data: null.
+
+### Implementation and test coverage
+
+Paths are relative to `backend/`.
+
+| File | Responsibility |
+| --- | --- |
+| `src/posts/service.ts` | Validate ID and perform the visibility-constrained lookup |
+| `src/posts/visibility.ts` | Shared policy for list and single-post reads |
+| `src/resolvers/find-post.ts` | Resolve actor, call service, map result/errors |
+| `src/resolvers/post.ts` | Shared status mapping and DataLoader author resolution |
+| `src/graphql.ts` and `src/resolvers/index.ts` | Query declaration and resolver registration |
+| `tests/integration/find-post.test.ts` | Direct-service and GraphQL lookup coverage |
+
+Service coverage includes published access for every caller, draft author/admin
+access, inaccessible and missing null results, agreement with list visibility,
+invalid IDs, exact ID matching without trimming, and storage-error propagation.
+
+GraphQL coverage uses real session lookup, the registered schema/resolvers, and
+DataLoader. It checks the visibility matrix, public status/author fields, identical
+missing/inaccessible responses, invalid-ID errors, and partial hello data when
+authentication or post storage is unavailable. Database failures use a closed client
+in controlled test scenarios. Fixtures are isolated and cleaned up with the test's
+uniquely owned database. These tests do not exercise the full Express HTTP route.
 
 ## Creating a draft (implemented)
 
@@ -784,16 +903,16 @@ docker compose --profile test run --rm integration-tests
 Make small commits after verified checkpoints. Check the final CI results before
 merging; a local verification result does not itself confirm CI success.
 
-## Planned authorization scenarios
+## Remaining scope and future entry points
 
-Single-post lookup remains future work.
+The currently documented post operations are implemented: list visible posts,
+read one visible post, create drafts, edit titles, and publish drafts.
 
-| Scenario | Expected |
-| --- | --- |
-| Anonymous visitor requests a published post by ID | Allowed |
-| Anonymous visitor or non-author requests a draft by ID | Inaccessible; response contract to be defined |
-| Author or admin requests a draft by ID | Allowed |
-| Future entry point invokes a post service | Same policy enforced using explicitly established identity |
+Unpublishing, deletion, and ownership transfer remain outside this scope. Future
+REST routes, jobs, and administrative entry points must establish a trusted actor
+and reuse the service policies. Internal entry points do not automatically grant
+admin access. Query-abuse controls and schema evolution remain separate learning
+work; completing post authorization does not implement those controls.
 
 ## Post-status exposure and filtering (implemented)
 
@@ -938,3 +1057,4 @@ and `tests/integration/publish-post.test.ts`, relative to `backend/`.
 
 The feature adds no index migration or query-plan guarantee. Query performance for
 the combined filters should be measured separately before adding indexes.
+
