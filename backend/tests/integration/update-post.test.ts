@@ -54,6 +54,7 @@ import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
 import { createUserLoader } from "../../src/loaders.js";
 
+// Purpose: Check service invariants first, then verify the public mutation enforces them too.
 test("post title editing service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const configuredDatabase = process.env.TEST_MONGO_DB;
@@ -109,6 +110,7 @@ test("post title editing service", async (t) => {
     await client.connect();
     await posts.insertMany(fixtures);
 
+    // Purpose: Editing a title must work for both statuses without publishing a draft.
     await t.test("authors edit their draft and published titles", async () => {
       for (const id of ["ada-draft", "ada-published"]) {
         const before = await posts.findOne({ _id: id });
@@ -127,6 +129,7 @@ test("post title editing service", async (t) => {
       }
     });
 
+    // Purpose: An admin may edit another author's title but may not change ownership or status.
     await t.test(
       "admins edit another author's posts without changing ownership or status",
       async () => {
@@ -148,6 +151,7 @@ test("post title editing service", async (t) => {
       },
     );
 
+    // Purpose: Compare all documents before and after the rejected anonymous operation.
     await t.test("anonymous edits leave all posts unchanged", async () => {
       const before = await snapshot();
 
@@ -161,6 +165,7 @@ test("post title editing service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Published visibility does not grant edit permission to a different author.
     await t.test(
       "non-authors cannot edit draft or published posts",
       async () => {
@@ -179,6 +184,7 @@ test("post title editing service", async (t) => {
       },
     );
 
+    // Purpose: Use one public error for missing and inaccessible records to hide existence.
     await t.test(
       "missing and inaccessible posts produce the same error",
       async () => {
@@ -201,6 +207,7 @@ test("post title editing service", async (t) => {
       },
     );
 
+    // Purpose: Invalid content must leave the entire stored collection unchanged.
     await t.test("invalid titles leave posts unchanged", async () => {
       const before = await snapshot();
 
@@ -214,6 +221,7 @@ test("post title editing service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Reject bad lookup boundaries instead of attempting an unintended update.
     await t.test("invalid IDs leave posts unchanged", async () => {
       const before = await snapshot();
 
@@ -229,6 +237,7 @@ test("post title editing service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Runtime extra properties must not bypass the title-only update contract.
     await t.test(
       "extra input properties cannot change protected fields",
       async () => {
@@ -260,6 +269,7 @@ test("post title editing service", async (t) => {
       },
     );
 
+    // Purpose: An update that changes nothing is still successful when the caller is authorized.
     await t.test("setting the existing title still succeeds", async () => {
       const before = await posts.findOne({ _id: "ada-draft" });
       assert.ok(before);
@@ -272,6 +282,7 @@ test("post title editing service", async (t) => {
       assert.deepEqual(await posts.findOne({ _id: before._id }), before);
     });
 
+    // Purpose: Storage failures must propagate without reporting an edit as successful.
     await t.test(
       "propagates storage failure without changing posts",
       async () => {
@@ -290,6 +301,7 @@ test("post title editing service", async (t) => {
         assert.deepEqual(await snapshot(), before);
       },
     );
+    // Purpose: Exercise session identity, author resolution, and sanitized mutation errors together.
     await t.test("GraphQL post editing", async (t) => {
       const password = await hashPassword("GraphQL editing fixture password!");
 
@@ -385,6 +397,7 @@ test("post title editing service", async (t) => {
         });
       }
 
+      // Purpose: Check the response and stored document so resolved authors cannot hide ownership changes.
       await t.test(
         "authors and admins edit draft and published titles",
         async () => {
@@ -440,6 +453,7 @@ test("post title editing service", async (t) => {
         },
       );
 
+      // Purpose: Every denied scenario must return the expected code and preserve all documents.
       await t.test("rejected edits leave all posts unchanged", async () => {
         const scenarios = [
           {
@@ -530,6 +544,7 @@ test("post title editing service", async (t) => {
         }
       });
 
+      // Purpose: Schema validation must reject protected fields before service execution.
       await t.test("GraphQL rejects protected input fields", async () => {
         for (const extra of [
           { authorId: "grace" },
@@ -549,6 +564,7 @@ test("post title editing service", async (t) => {
         }
       });
 
+      // Purpose: Inject each storage boundary separately and ensure neither produces a successful edit.
       await t.test(
         "authentication and update failures return generic errors",
         async () => {

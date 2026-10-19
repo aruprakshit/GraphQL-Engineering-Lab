@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { normalizeUsername } from "./usernames.js";
 
+// Purpose: Usernames intentionally ignore surrounding spaces and capitalization, unlike passwords.
 test("normalizes username whitespace and capitalization", () => {
   // ACT
   const username = normalizeUsername(" Ada ");
@@ -24,6 +25,7 @@ test("normalizes username whitespace and capitalization", () => {
   assert.equal(username, "ada");
 });
 
+// Purpose: Check allowed characters and both inclusive length boundaries.
 test("accepts supported username characters and length boundaries", () => {
   // ACT AND ASSERT
   assert.equal(normalizeUsername("user_123"), "user_123");
@@ -31,6 +33,7 @@ test("accepts supported username characters and length boundaries", () => {
   assert.equal(normalizeUsername("a".repeat(32)), "a".repeat(32));
 });
 
+// Purpose: Reject internal spaces and unsupported punctuation instead of silently rewriting them.
 test("rejects unsupported usernames", () => {
   // ARRANGE
   const invalidNames = [

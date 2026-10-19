@@ -20,6 +20,7 @@ import { test } from "node:test";
 import { InvalidPostTitleError } from "./errors.js";
 import { normalizePostTitle } from "./titles.js";
 
+// Purpose: Normalize only the edges so deliberate internal title formatting survives.
 test("trims surrounding whitespace and preserves internal whitespace", () => {
   assert.equal(
     normalizePostTitle(" \n Learning  GraphQL\twith MongoDB \t"),
@@ -27,6 +28,7 @@ test("trims surrounding whitespace and preserves internal whitespace", () => {
   );
 });
 
+// Purpose: Both inclusive boundaries must be accepted, not just typical titles.
 test("accepts titles at the minimum and maximum lengths", () => {
   assert.equal(normalizePostTitle("A"), "A");
 
@@ -34,12 +36,14 @@ test("accepts titles at the minimum and maximum lengths", () => {
   assert.equal(normalizePostTitle(maximum), maximum);
 });
 
+// Purpose: Remove surrounding whitespace before deciding whether the title is too long.
 test("applies the length limit after trimming", () => {
   const maximum = "a".repeat(200);
 
   assert.equal(normalizePostTitle(`  ${maximum}\n`), maximum);
 });
 
+// Purpose: Emoji expose the difference between Unicode code points and UTF-16 code units.
 test("counts Unicode code points rather than UTF-16 code units", () => {
   // Each emoji uses two UTF-16 code units but counts as one allowed code point.
   const maximum = "🚀".repeat(200);
@@ -52,12 +56,14 @@ test("counts Unicode code points rather than UTF-16 code units", () => {
   );
 });
 
+// Purpose: Blank content and content beyond the maximum must share the validation error.
 test("rejects empty, whitespace-only, and oversized titles", () => {
   for (const title of ["", " \t\n ", "a".repeat(201)]) {
     assert.throws(() => normalizePostTitle(title), InvalidPostTitleError);
   }
 });
 
+// Purpose: Numbers, arrays, and objects must not be coerced into unintended titles.
 test("rejects non-string input without coercion", () => {
   for (const value of [undefined, null, 123, {}, ["A title"]]) {
     assert.throws(() => normalizePostTitle(value), InvalidPostTitleError);

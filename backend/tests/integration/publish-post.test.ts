@@ -56,6 +56,7 @@ import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
 import { createUserLoader } from "../../src/loaders.js";
 
+// Purpose: Compare direct service transitions with GraphQL behavior and concurrent requests.
 test("post publication service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const configuredDatabase = process.env.TEST_MONGO_DB;
@@ -97,6 +98,7 @@ test("post publication service", async (t) => {
   try {
     await client.connect();
 
+    // Purpose: Persist the state transition while retaining the original identity, title, and author.
     await t.test(
       "authors and admins publish drafts without changing other fields",
       async () => {
@@ -115,6 +117,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: Anonymous callers must not cause any state transition.
     await t.test("anonymous publication leaves posts unchanged", async () => {
       const draft = await insertPost();
       const before = await snapshot();
@@ -127,6 +130,7 @@ test("post publication service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Unauthorized callers must not learn whether another author's post is already published.
     await t.test(
       "non-authors cannot publish drafts or inspect publication state",
       async () => {
@@ -148,6 +152,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: A nonexistent ID must be indistinguishable from an inaccessible post.
     await t.test("missing posts produce the same not-found error", async () => {
       const before = await snapshot();
 
@@ -163,6 +168,7 @@ test("post publication service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Already-published records conflict even when the caller is an admin.
     await t.test(
       "repeated publication conflicts for authors and admins",
       async () => {
@@ -187,6 +193,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: Reject invalid IDs before they can select an unintended record.
     await t.test("invalid IDs cause no changes", async () => {
       const before = await snapshot();
 
@@ -200,6 +207,7 @@ test("post publication service", async (t) => {
       assert.deepEqual(await snapshot(), before);
     });
 
+    // Purpose: Start both transitions together; exactly one may change draft to published.
     await t.test(
       "concurrent attempts produce one success and one conflict",
       async () => {
@@ -240,6 +248,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: Read visibility must change as a consequence of the successful transition.
     await t.test(
       "publication makes the post visible to anonymous callers",
       async () => {
@@ -269,6 +278,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: An unavailable client must not make publication appear successful.
     await t.test(
       "propagates storage failure without changing posts",
       async () => {
@@ -285,6 +295,7 @@ test("post publication service", async (t) => {
       },
     );
 
+    // Purpose: Add session identity, request trust, response authors, and public error codes.
     await t.test("GraphQL publication", async (t) => {
       const password = await hashPassword(
         "GraphQL publication fixture password!",
@@ -384,6 +395,7 @@ test("post publication service", async (t) => {
         });
       }
 
+      // Purpose: Publishing as admin must preserve the original author; repetition must conflict.
       await t.test(
         "authors and admins publish with the original author",
         async () => {
@@ -426,6 +438,7 @@ test("post publication service", async (t) => {
         },
       );
 
+      // Purpose: Check all denied cases against a full before-and-after snapshot.
       await t.test("rejected publication leaves posts unchanged", async () => {
         const draft = await insertPost();
         const published = await insertPost("published");
@@ -503,6 +516,7 @@ test("post publication service", async (t) => {
         }
       });
 
+      // Purpose: Independent GraphQL contexts must still share the same atomic storage transition.
       await t.test(
         "concurrent GraphQL requests yield one success and one conflict",
         async () => {
@@ -532,6 +546,7 @@ test("post publication service", async (t) => {
         },
       );
 
+      // Purpose: Use an anonymous query to prove published content becomes publicly readable.
       await t.test(
         "published posts become visible through anonymous GraphQL queries",
         async () => {
@@ -566,6 +581,7 @@ test("post publication service", async (t) => {
         },
       );
 
+      // Purpose: Separate authentication and post-write failures while preserving every document.
       await t.test(
         "authentication and write failures return generic errors",
         async () => {

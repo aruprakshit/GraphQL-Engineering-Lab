@@ -51,6 +51,7 @@ import { encodePostCursor } from "../../src/pagination.js";
 import { InvalidPostStatusError } from "../../src/posts/errors.js";
 import type { ListPostsOptions } from "../../src/posts/service.js";
 
+// Purpose: Build interleaved fixtures to check authorization before pagination and through GraphQL.
 test("post service visibility and pagination", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const configuredDatabase = process.env.TEST_MONGO_DB;
@@ -116,6 +117,7 @@ test("post service visibility and pagination", async (t) => {
     await client.connect();
     await database.collection<PostDocument>("posts").insertMany(fixtures);
 
+    // Purpose: Anonymous visibility excludes every draft, regardless of author.
     await t.test("anonymous callers see only published posts", async () => {
       const result = await listVisiblePosts(database, null, {
         pageSize: 20,
@@ -129,6 +131,7 @@ test("post service visibility and pagination", async (t) => {
       assert.equal(result.hasNextPage, false);
     });
 
+    // Purpose: Each user sees public posts plus only the drafts linked to their identity.
     await t.test(
       "users see published posts and only their own drafts",
       async () => {
@@ -158,6 +161,7 @@ test("post service visibility and pagination", async (t) => {
       },
     );
 
+    // Purpose: Admins can read all fixtures while retaining deterministic ordering.
     await t.test("admins see every post", async () => {
       const result = await listVisiblePosts(database, admin, {
         pageSize: 20,
@@ -171,6 +175,7 @@ test("post service visibility and pagination", async (t) => {
       assert.equal(result.hasNextPage, false);
     });
 
+    // Purpose: Invisible records must neither fill a page slot nor imply another visible page.
     await t.test(
       "hidden drafts do not consume page slots or imply another page",
       async () => {
@@ -189,6 +194,7 @@ test("post service visibility and pagination", async (t) => {
       },
     );
 
+    // Purpose: The next cursor boundary must continue through the authorized subset only.
     await t.test("paginates through the visible set", async () => {
       const first = await listVisiblePosts(database, ada, {
         pageSize: 2,
@@ -213,6 +219,7 @@ test("post service visibility and pagination", async (t) => {
       assert.equal(second.hasNextPage, false);
     });
 
+    // Purpose: A cursor identifies a position, never a grant to read its referenced record.
     await t.test(
       "a cursor is a position, not permission to read a draft",
       async () => {
@@ -229,6 +236,7 @@ test("post service visibility and pagination", async (t) => {
       },
     );
 
+    // Purpose: No visible records beyond the boundary means an empty final page.
     await t.test(
       "returns an empty final page after the last visible post",
       async () => {
@@ -242,6 +250,7 @@ test("post service visibility and pagination", async (t) => {
       },
     );
 
+    // Purpose: Service callers bypass GraphQL validation, so bounds must be checked here too.
     await t.test("enforces pagination limits for direct callers", async () => {
       for (const pageSize of [0, -1, 21, 1.5, Number.NaN]) {
         await assert.rejects(
@@ -264,6 +273,7 @@ test("post service visibility and pagination", async (t) => {
       }
     });
 
+    // Purpose: Resolve actual sessions before exercising GraphQL visibility and filtering.
     await t.test(
       "GraphQL applies session identity and post visibility",
       async (t) => {
@@ -427,6 +437,7 @@ test("post service visibility and pagination", async (t) => {
             },
           };
         }
+        // Purpose: Enum mapping and status selection must narrow each role's existing permissions.
         await t.test(
           "status filtering preserves authorization and maps enum values",
           async () => {
@@ -477,6 +488,7 @@ test("post service visibility and pagination", async (t) => {
           },
         );
 
+        // Purpose: Check cursors and page metadata against the filtered authorized subset.
         await t.test(
           "filtered pagination uses only matching visible posts",
           async () => {
@@ -550,6 +562,7 @@ test("post service visibility and pagination", async (t) => {
           },
         );
 
+        // Purpose: Invalid enum values must fail validation before a resolver returns data.
         await t.test(
           "GraphQL rejects invalid enum input before execution",
           async () => {
@@ -561,6 +574,7 @@ test("post service visibility and pagination", async (t) => {
             }
           },
         );
+        // Purpose: Compare full edges, authors, and page metadata for each caller role.
         await t.test(
           "returns only the posts visible to each caller",
           async () => {
@@ -616,6 +630,7 @@ test("post service visibility and pagination", async (t) => {
           },
         );
 
+        // Purpose: Encoded cursor boundaries must retain the same authorized ordering across pages.
         await t.test("preserves cursors across authorized pages", async () => {
           const expectedPages = [
             {
@@ -657,6 +672,7 @@ test("post service visibility and pagination", async (t) => {
           }
         });
 
+        // Purpose: A session lookup outage must not expose an anonymous fallback response.
         await t.test(
           "does not fall back to anonymous posts when authentication fails",
           async () => {
@@ -687,6 +703,7 @@ test("post service visibility and pagination", async (t) => {
         );
       },
     );
+    // Purpose: Filtering draft or published content may narrow permissions, never broaden them.
     await t.test(
       "status filters narrow the authorized result set",
       async () => {
@@ -757,6 +774,7 @@ test("post service visibility and pagination", async (t) => {
         }
       },
     );
+    // Purpose: Absence of a filter must preserve the original role-dependent list.
     await t.test(
       "omitted and null status preserve unfiltered visibility",
       async () => {
@@ -793,6 +811,7 @@ test("post service visibility and pagination", async (t) => {
         }
       },
     );
+    // Purpose: Other authors' drafts must not consume page slots reserved for visible matches.
     await t.test("paginates only matching authorized drafts", async () => {
       const first = await listVisiblePosts(database, admin, {
         pageSize: 2,
@@ -840,6 +859,7 @@ test("post service visibility and pagination", async (t) => {
       );
       assert.equal(adaPage.hasNextPage, false);
     });
+    // Purpose: Intervening and trailing drafts must not distort published-only page metadata.
     await t.test(
       "published pagination ignores intervening and trailing drafts",
       async () => {
@@ -868,6 +888,7 @@ test("post service visibility and pagination", async (t) => {
         assert.equal(second.hasNextPage, false);
       },
     );
+    // Purpose: Invalid runtime status must be rejected before the database-call counter increments.
     await t.test(
       "rejects unsupported status values before querying",
       async () => {

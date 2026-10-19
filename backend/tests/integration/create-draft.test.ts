@@ -51,6 +51,7 @@ import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
 import { createUserLoader } from "../../src/loaders.js";
 
+// Purpose: Start with service rules, then exercise the same rules through GraphQL and sessions.
 test("draft creation service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const configuredDatabase = process.env.TEST_MONGO_DB;
@@ -74,6 +75,7 @@ test("draft creation service", async (t) => {
   try {
     await client.connect();
 
+    // Purpose: Check persisted content and count as well as the returned draft.
     await t.test("creates a normalized draft owned by the actor", async () => {
       // Compare counts around the operation to detect a missing or unexpected insert.
       const before = await posts.countDocuments();
@@ -93,6 +95,7 @@ test("draft creation service", async (t) => {
       assert.equal(await posts.countDocuments(), before + 1);
     });
 
+    // Purpose: Repeated titles are allowed, but generated record identities must differ.
     await t.test("generates a different ID for each draft", async () => {
       const first = await createDraft(database, ada, {
         title: "Same title",
@@ -107,6 +110,7 @@ test("draft creation service", async (t) => {
       assert.ok(await posts.findOne({ _id: second._id }));
     });
 
+    // Purpose: Admin privileges do not let input silently choose another draft author.
     await t.test("admins create drafts under their own identity", async () => {
       const created = await createDraft(database, admin, {
         title: "Admin draft",
@@ -117,6 +121,7 @@ test("draft creation service", async (t) => {
       assert.deepEqual(await posts.findOne({ _id: created._id }), created);
     });
 
+    // Purpose: Direct callers can supply extra runtime properties, so the service must ignore them.
     await t.test(
       "ignores caller-supplied ownership, status, and ID",
       async () => {
@@ -140,6 +145,7 @@ test("draft creation service", async (t) => {
       },
     );
 
+    // Purpose: Unauthenticated creation must leave the collection count unchanged.
     await t.test("rejects anonymous creation without inserting", async () => {
       const before = await posts.countDocuments();
 
@@ -153,6 +159,7 @@ test("draft creation service", async (t) => {
       assert.equal(await posts.countDocuments(), before);
     });
 
+    // Purpose: Validation failures must happen without partially creating a post.
     await t.test("rejects invalid titles without inserting", async () => {
       const before = await posts.countDocuments();
 
@@ -166,6 +173,7 @@ test("draft creation service", async (t) => {
       assert.equal(await posts.countDocuments(), before);
     });
 
+    // Purpose: Draft creation must immediately respect the existing read visibility policy.
     await t.test(
       "new drafts follow the existing visibility policy",
       async () => {
@@ -194,6 +202,7 @@ test("draft creation service", async (t) => {
       },
     );
 
+    // Purpose: A closed client must reject the operation without inserting into the real collection.
     await t.test(
       "propagates storage failure without claiming success",
       async () => {
@@ -213,6 +222,7 @@ test("draft creation service", async (t) => {
       },
     );
 
+    // Purpose: Add GraphQL input validation, request guards, sessions, and author resolution.
     await t.test("GraphQL draft creation", async (t) => {
       const password = await hashPassword("GraphQL draft fixture password!");
 
@@ -310,6 +320,7 @@ test("draft creation service", async (t) => {
         });
       }
 
+      // Purpose: The returned author must match the session actor, including for admin creation.
       await t.test(
         "users and admins create their own drafts with resolved authors",
         async () => {
@@ -350,6 +361,7 @@ test("draft creation service", async (t) => {
         },
       );
 
+      // Purpose: Vary authentication, title, and request trust while checking no insert occurred.
       await t.test(
         "rejects anonymous and invalid requests without inserting",
         async () => {
@@ -404,6 +416,7 @@ test("draft creation service", async (t) => {
         },
       );
 
+      // Purpose: Unknown input fields must be rejected before the resolver can create anything.
       await t.test(
         "rejects ownership, status, and ID input fields",
         async () => {
@@ -427,6 +440,7 @@ test("draft creation service", async (t) => {
         },
       );
 
+      // Purpose: Read the created draft through GraphQL as each role to verify privacy end to end.
       await t.test(
         "new drafts remain visible only to their author and admins",
         async () => {
@@ -469,6 +483,7 @@ test("draft creation service", async (t) => {
         },
       );
 
+      // Purpose: Separate authentication storage failure from draft write failure; neither may insert.
       await t.test(
         "reports authentication and write failures without inserting",
         async () => {

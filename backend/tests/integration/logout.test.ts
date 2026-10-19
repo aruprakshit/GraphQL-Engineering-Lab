@@ -36,6 +36,7 @@ import {
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createUserLoader } from "../../src/loaders.js";
 
+// Purpose: Compare cookie-clearing callbacks with actual MongoDB revocation, not response data alone.
 test("GraphQL logout", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const databaseName = process.env.TEST_MONGO_DB;
@@ -112,6 +113,7 @@ test("GraphQL logout", async (t) => {
       return { result, clearCalls };
     }
 
+    // Purpose: Keep a second active session to prove logout targets only the supplied token.
     await t.test("revokes only the supplied session", async () => {
       const first = await createSession(database, userId);
       const second = await createSession(database, userId);
@@ -131,6 +133,7 @@ test("GraphQL logout", async (t) => {
       });
     });
 
+    // Purpose: Repeated logout is safe when there is no active session left to revoke.
     await t.test(
       "succeeds for missing, malformed, or revoked sessions",
       async () => {
@@ -151,6 +154,7 @@ test("GraphQL logout", async (t) => {
       },
     );
 
+    // Purpose: A rejected request must retain both the usable session and its cookie.
     await t.test(
       "rejects an untrusted request without revoking its session",
       async () => {
@@ -172,6 +176,7 @@ test("GraphQL logout", async (t) => {
       },
     );
 
+    // Purpose: Do not clear the client cookie or claim revocation when storage could not be reached.
     await t.test("does not clear the cookie when storage fails", async () => {
       const session = await createSession(database, userId);
 

@@ -1,3 +1,27 @@
+/**
+ * Test scenarios
+ *
+ * | Scenario | Expected |
+ * | --- | --- |
+ * | Service: published post | Returns the post for anonymous callers, either author, and admins |
+ * | Service: draft post | Returns it only to its author and admins; others receive null |
+ * | Service: missing or inaccessible post | Returns null for both without disclosing existence |
+ * | Service: single-post and list lookups | Agree on visibility for every fixture and caller role |
+ * | Service: empty or oversized ID | Throws InvalidPostIdError |
+ * | Service: ID with surrounding spaces | Looks up the exact ID without trimming into another record |
+ * | Service: database failure | Rejects instead of returning null |
+ * | GraphQL: authorized lookup | Returns public fields, mapped status enum, and resolved author |
+ * | GraphQL: inaccessible or missing post | Returns identical data with post: null and no errors |
+ * | GraphQL: invalid ID | Returns BAD_USER_INPUT at post; hello remains available |
+ * | GraphQL: authentication or post-storage failure | Returns generic SERVICE_UNAVAILABLE at post; hello remains available |
+ *
+ * Reading guide:
+ * - Direct service cases establish object visibility independently of GraphQL.
+ * - Nested GraphQL cases use real sessions to verify identity, enum mapping, and authors.
+ * - The hello field proves a nullable post error preserves unrelated response data.
+ * - A unique database isolates the fixtures; cleanup removes only this suite's database.
+ */
+
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -20,6 +44,7 @@ import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createUserLoader } from "../../src/loaders.js";
 
+// Purpose: Check single-record authorization at the service and GraphQL boundaries.
 test("single-post visibility service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
   const configuredDatabase = process.env.TEST_MONGO_DB;
@@ -65,6 +90,7 @@ test("single-post visibility service", async (t) => {
     await client.connect();
     await posts.insertMany(fixtures);
 
+    // Purpose: Public records are readable regardless of whether a session exists.
     await t.test("everyone can read published posts", async () => {
       const published = fixtures.find((post) => post._id === "ada-published");
       assert.ok(published);
@@ -77,6 +103,7 @@ test("single-post visibility service", async (t) => {
       }
     });
 
+    // Purpose: Knowing a draft ID must not grant access to a non-author.
     await t.test("only the author and admins can read a draft", async () => {
       const scenarios = [
         {
@@ -111,6 +138,7 @@ test("single-post visibility service", async (t) => {
       }
     });
 
+    // Purpose: Return the same absence result for hidden and nonexistent records.
     await t.test(
       "missing and inaccessible posts both return null",
       async () => {
@@ -133,6 +161,7 @@ test("single-post visibility service", async (t) => {
       },
     );
 
+    // Purpose: Single-record lookup must agree with the authorized list for every role.
     await t.test(
       "single-post and list visibility remain consistent",
       async () => {
@@ -142,6 +171,7 @@ test("single-post visibility service", async (t) => {
             afterId: null,
           });
 
+          // Compare both read paths so knowing an ID cannot bypass list visibility.
           const listedIds = new Set(page.posts.map((post) => post._id));
 
           for (const fixture of fixtures) {
@@ -153,6 +183,7 @@ test("single-post visibility service", async (t) => {
       },
     );
 
+    // Purpose: Malformed IDs are input errors, not ordinary missing records.
     await t.test("rejects invalid IDs", async () => {
       for (const id of ["", "a".repeat(257)]) {
         await assert.rejects(
@@ -162,6 +193,7 @@ test("single-post visibility service", async (t) => {
       }
     });
 
+    // Purpose: Spaces are part of an ID; lookup must not silently select a trimmed alternative.
     await t.test("does not trim IDs into a different lookup", async () => {
       assert.equal(
         await findVisiblePost(database, admin, " ada-published "),
@@ -169,6 +201,7 @@ test("single-post visibility service", async (t) => {
       );
     });
 
+    // Purpose: A broken database must reject rather than disguise failure as a missing post.
     await t.test(
       "propagates database failure instead of returning null",
       async () => {
@@ -181,6 +214,7 @@ test("single-post visibility service", async (t) => {
         );
       },
     );
+    // Purpose: Verify nullable-field errors preserve unrelated data in the same response.
     await t.test("GraphQL single-post lookup", async (t) => {
       const password = await hashPassword("Single post fixture password!");
 
@@ -231,10 +265,12 @@ test("single-post visibility service", async (t) => {
         const authenticationDatabase =
           options.authenticationDatabase ?? database;
 
+        // Each helper call builds a fresh request context from the supplied session cookie.
         const token = readSessionCookie(
           session ? `session=${session.token}` : undefined,
         );
 
+        // A read query must not invoke login, logout, or state-changing request helpers.
         const unexpectedCall = (): never => {
           throw new Error("Post query invoked a mutation helper");
         };
@@ -268,6 +304,7 @@ test("single-post visibility service", async (t) => {
         });
       }
 
+      // Purpose: Check visibility, public status enum, and author resolution for each caller.
       await t.test(
         "returns authorized posts with status and author",
         async () => {
@@ -318,11 +355,13 @@ test("single-post visibility service", async (t) => {
         },
       );
 
+      // Purpose: The whole public data payload must not reveal whether a hidden draft exists.
       await t.test(
         "missing and inaccessible posts have identical responses",
         async () => {
           for (const session of [null, sessions.grace]) {
             const missing = await executePost(session, "missing-post");
+            // Compare the full data payload, not just null, to avoid leaking whether a draft exists.
             const inaccessible = await executePost(session, "ada-draft");
 
             assert.equal(missing.errors, undefined);
@@ -338,6 +377,7 @@ test("single-post visibility service", async (t) => {
         },
       );
 
+      // Purpose: Input failure is scoped to post; the unrelated hello field must still succeed.
       await t.test(
         "invalid IDs return BAD_USER_INPUT at the post field",
         async () => {
@@ -357,6 +397,7 @@ test("single-post visibility service", async (t) => {
         },
       );
 
+      // Purpose: Both storage failure paths must preserve hello while returning a sanitized post error.
       await t.test(
         "authentication and post-storage failures preserve partial data",
         async () => {
@@ -366,6 +407,7 @@ test("single-post visibility service", async (t) => {
           );
           await unavailableClient.close();
 
+          // Separate authentication storage from post storage to check both failure boundaries.
           const scenarios = [
             {
               session: sessions.ada,
@@ -409,6 +451,7 @@ test("single-post visibility service", async (t) => {
     });
   } finally {
     try {
+      // Remove only the uniquely named database created by this suite, even after failures.
       await database.dropDatabase();
     } finally {
       await client.close();

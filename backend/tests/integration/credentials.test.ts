@@ -27,6 +27,7 @@ import {
 } from "../../src/auth/credentials.js";
 import { hashPassword } from "../../src/auth/passwords.js";
 
+// Purpose: Real private accounts and public users establish the verification prerequisites.
 test("credential verification", async (t) => {
   // 1. ARRANGE: REQUIRE THE ISOLATED TEST DATABASE
   const url = process.env.TEST_MONGO_URL;
@@ -63,6 +64,7 @@ test("credential verification", async (t) => {
     // Initialize once for the suite, as startup does for the running application.
     const verifyCredentials = await createCredentialVerifier(database);
 
+    // Purpose: Normalization may change the username, but the returned identity must exclude credentials.
     await t.test("returns only identity for valid credentials", async () => {
       // ACT: ALSO EXERCISE USERNAME NORMALIZATION
       const identity = await verifyCredentials({
@@ -78,6 +80,7 @@ test("credential verification", async (t) => {
       });
     });
 
+    // Purpose: The wrong secret must not resolve an otherwise valid account.
     await t.test("rejects incorrect passwords", async () => {
       assert.equal(
         await verifyCredentials({
@@ -88,6 +91,7 @@ test("credential verification", async (t) => {
       );
     });
 
+    // Purpose: Unknown users follow the same failed-verification contract as wrong passwords.
     await t.test("rejects unknown usernames", async () => {
       assert.equal(
         await verifyCredentials({
@@ -98,6 +102,7 @@ test("credential verification", async (t) => {
       );
     });
 
+    // Purpose: Reject malformed input independently of whether an account exists.
     await t.test("rejects invalid credential input", async () => {
       await assert.rejects(
         verifyCredentials({ username: "!", password }),
@@ -110,6 +115,7 @@ test("credential verification", async (t) => {
       );
     });
 
+    // Purpose: Read role changes from storage instead of retaining an earlier identity.
     await t.test("reads the current account role", async () => {
       try {
         await database
@@ -128,6 +134,7 @@ test("credential verification", async (t) => {
       }
     });
 
+    // Purpose: A private account alone is insufficient if its public user has disappeared.
     await t.test("rejects an account without a public user", async () => {
       try {
         await database
@@ -143,6 +150,7 @@ test("credential verification", async (t) => {
       }
     });
 
+    // Purpose: Verification must not issue sessions; that side effect belongs to login.
     await t.test("does not create sessions during verification", async () => {
       assert.equal(
         await database.collection("sessions").countDocuments({
