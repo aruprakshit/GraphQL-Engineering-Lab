@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { test } from "node:test";
 import { MongoClient } from "mongodb";
-import type { Actor } from "../../src/auth/models.js";
-import type { PostDocument } from "../../src/models.js";
 import { findVisiblePost, listVisiblePosts } from "../../src/posts/service.js";
 import { InvalidPostIdError } from "../../src/posts/errors.js";
+import { graphql } from "graphql";
+import { schema } from "../../src/graphql.js";
+import { rootValue } from "../../src/resolvers/index.js";
+import type { GraphQLContext } from "../../src/graphql-context.js";
+import type {
+  AccountDocument,
+  Actor,
+  CreatedSession,
+} from "../../src/auth/models.js";
+import type { PostDocument, UserDocument } from "../../src/models.js";
+import { hashPassword } from "../../src/auth/passwords.js";
+import { createSession, resolveSession } from "../../src/auth/sessions.js";
+import { readSessionCookie } from "../../src/auth/session-cookie.js";
+import { createRequestActor } from "../../src/auth/request-actor.js";
+import { createUserLoader } from "../../src/loaders.js";
 
 test("single-post visibility service", async (t) => {
   const url = process.env.TEST_MONGO_URL;
@@ -168,6 +181,232 @@ test("single-post visibility service", async (t) => {
         );
       },
     );
+    await t.test("GraphQL single-post lookup", async (t) => {
+      const password = await hashPassword("Single post fixture password!");
+
+      await database.collection<UserDocument>("users").insertMany([
+        { _id: "ada", name: "Ada" },
+        { _id: "grace", name: "Grace" },
+        { _id: "admin", name: "Admin" },
+      ]);
+
+      await database.collection<AccountDocument>("accounts").insertMany([
+        { _id: "ada", username: "ada", role: "user", password },
+        { _id: "grace", username: "grace", role: "user", password },
+        { _id: "admin", username: "admin", role: "admin", password },
+      ]);
+
+      const sessions = {
+        ada: await createSession(database, "ada"),
+        grace: await createSession(database, "grace"),
+        admin: await createSession(database, "admin"),
+      };
+
+      const source = `
+    query FindPost($id: ID!) {
+      hello
+      post(id: $id) {
+        id
+        title
+        status
+        author {
+          id
+          name
+        }
+      }
+    }
+  `;
+
+      interface RequestOptions {
+        database?: GraphQLContext["database"];
+        authenticationDatabase?: GraphQLContext["database"];
+      }
+
+      async function executePost(
+        session: CreatedSession | null,
+        id: string,
+        options: RequestOptions = {},
+      ) {
+        const requestDatabase = options.database ?? database;
+        const authenticationDatabase =
+          options.authenticationDatabase ?? database;
+
+        const token = readSessionCookie(
+          session ? `session=${session.token}` : undefined,
+        );
+
+        const unexpectedCall = (): never => {
+          throw new Error("Post query invoked a mutation helper");
+        };
+
+        const context: GraphQLContext = {
+          requestId: randomUUID(),
+          database: requestDatabase,
+          logDatabaseCall: () => {},
+          userLoader: createUserLoader(
+            requestDatabase,
+            () => {},
+            "find-post-test",
+          ),
+          sessionToken: token,
+          getActor: createRequestActor(() =>
+            resolveSession(authenticationDatabase, token),
+          ),
+          verifyCredentials: async () => unexpectedCall(),
+          beginLogin: unexpectedCall,
+          assertAuthRequest: unexpectedCall,
+          setSessionCookie: unexpectedCall,
+          clearSessionCookie: unexpectedCall,
+        };
+
+        return graphql({
+          schema,
+          rootValue,
+          source,
+          variableValues: { id },
+          contextValue: context,
+        });
+      }
+
+      await t.test(
+        "returns authorized posts with status and author",
+        async () => {
+          const callers = [
+            {
+              session: null,
+              visibleIds: ["ada-published"],
+            },
+            {
+              session: sessions.ada,
+              visibleIds: ["ada-published", "ada-draft"],
+            },
+            {
+              session: sessions.grace,
+              visibleIds: ["ada-published", "grace-draft"],
+            },
+            {
+              session: sessions.admin,
+              visibleIds: fixtures.map((post) => post._id),
+            },
+          ];
+
+          for (const caller of callers) {
+            for (const fixture of fixtures) {
+              const result = await executePost(caller.session, fixture._id);
+
+              assert.equal(result.errors, undefined);
+
+              if (!caller.visibleIds.includes(fixture._id)) {
+                assert.equal(result.data?.post, null);
+                continue;
+              }
+
+              assert.equal(
+                JSON.stringify(result.data?.post),
+                JSON.stringify({
+                  id: fixture._id,
+                  title: fixture.title,
+                  status: fixture.status === "draft" ? "DRAFT" : "PUBLISHED",
+                  author: {
+                    id: fixture.authorId,
+                    name: fixture.authorId === "ada" ? "Ada" : "Grace",
+                  },
+                }),
+              );
+            }
+          }
+        },
+      );
+
+      await t.test(
+        "missing and inaccessible posts have identical responses",
+        async () => {
+          for (const session of [null, sessions.grace]) {
+            const missing = await executePost(session, "missing-post");
+            const inaccessible = await executePost(session, "ada-draft");
+
+            assert.equal(missing.errors, undefined);
+            assert.equal(inaccessible.errors, undefined);
+            assert.equal(missing.data?.post, null);
+            assert.equal(inaccessible.data?.post, null);
+
+            assert.equal(
+              JSON.stringify(missing.data),
+              JSON.stringify(inaccessible.data),
+            );
+          }
+        },
+      );
+
+      await t.test(
+        "invalid IDs return BAD_USER_INPUT at the post field",
+        async () => {
+          for (const id of ["", "a".repeat(257)]) {
+            const result = await executePost(null, id);
+
+            assert.equal(result.data?.post, null);
+            assert.equal(result.errors?.length, 1);
+            assert.equal(result.errors?.[0]?.extensions.code, "BAD_USER_INPUT");
+            assert.deepEqual(result.errors?.[0]?.path, ["post"]);
+
+            assert.equal(
+              result.data?.hello,
+              "Hello from GraphQL Engineering Lab",
+            );
+          }
+        },
+      );
+
+      await t.test(
+        "authentication and post-storage failures preserve partial data",
+        async () => {
+          const unavailableClient = new MongoClient(url);
+          const unavailableDatabase = unavailableClient.db(
+            database.databaseName,
+          );
+          await unavailableClient.close();
+
+          const scenarios = [
+            {
+              session: sessions.ada,
+              options: {
+                authenticationDatabase: unavailableDatabase,
+              },
+              message: "Authentication temporarily unavailable",
+            },
+            {
+              session: null,
+              options: {
+                database: unavailableDatabase,
+              },
+              message: "Post temporarily unavailable",
+            },
+          ];
+
+          for (const scenario of scenarios) {
+            const result = await executePost(
+              scenario.session,
+              "ada-published",
+              scenario.options,
+            );
+
+            assert.equal(result.data?.post, null);
+            assert.equal(result.errors?.length, 1);
+            assert.equal(
+              result.errors?.[0]?.extensions.code,
+              "SERVICE_UNAVAILABLE",
+            );
+            assert.equal(result.errors?.[0]?.message, scenario.message);
+            assert.deepEqual(result.errors?.[0]?.path, ["post"]);
+
+            assert.equal(
+              result.data?.hello,
+              "Hello from GraphQL Engineering Lab",
+            );
+          }
+        },
+      );
+    });
   } finally {
     try {
       await database.dropDatabase();
