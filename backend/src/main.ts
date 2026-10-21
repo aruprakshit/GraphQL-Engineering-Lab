@@ -16,6 +16,7 @@ import { createLoginAttemptGuard } from "./auth/login-attempt.js";
 import { readSessionCookie } from "./auth/session-cookie.js";
 import { resolveSession } from "./auth/sessions.js";
 import { createRequestActor } from "./auth/request-actor.js";
+import { executeWithQueryBudget } from "./execute-with-query-budget.js";
 
 interface LearningCheck {
   _id: string;
@@ -103,6 +104,7 @@ app.all("/graphql", (req, res, next) => {
   const handler = createHandler({
     schema,
     rootValue,
+    execute: executeWithQueryBudget,
     context: () => {
       let databaseCalls = 0;
 
