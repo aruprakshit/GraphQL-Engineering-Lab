@@ -31,6 +31,7 @@
     "express": "^5.2.1",
     "graphql": "^17.0.2",
     "graphql-http": "^1.23.1",
+    "graphql-query-complexity": "2.0.0",
     "mongodb": "^7.7.0",
     "ruru": "^2.0.2"
   },
