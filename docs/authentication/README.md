@@ -226,5 +226,6 @@ actual verification results before merging.
 - Define and test combinations of login and logout in one mutation operation.
   The current token and cached actor reflect the incoming request; cookie writes
   do not refresh them within that operation.
-- Query depth validation remains deferred under ticket #32. Authentication limits
+- [Query depth validation](../query-depth.md) is implemented under ticket #32. Authentication limits
   do not provide general query complexity or width protection.
+

@@ -253,7 +253,7 @@ Manual playground verification:
 
 ## Limits and follow-up work
 
-- Query depth protection remains deferred under issue #32.
+- [Depth validation](query-depth.md) now runs alongside standard validation before complexity analysis (issue #32).
 - This is per-operation admission, not request-rate limiting or a global workload cap.
 - Parsing, HTTP input handling, validation, and analysis still consume resources
   before execution. Body-size limits and parser/validation protections are separate.
@@ -265,3 +265,4 @@ Manual playground verification:
   fallback baseline does not automatically capture new cardinality or I/O costs.
 - Recalibrate weights and the budget using representative operations and measured
   behavior; current numbers are not a proven production capacity threshold.
+

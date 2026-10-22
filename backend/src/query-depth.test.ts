@@ -10,6 +10,7 @@ import {
 import { countOperationDepths } from "@graphile/depth-limit";
 import { schema } from "./graphql.js";
 import { createDepthValidationRule, MAX_QUERY_DEPTH } from "./query-depth.js";
+import { executeWithQueryBudget } from "./execute-with-query-budget.js";
 
 /**
  * A recursive test schema makes valid over-depth operations possible.
@@ -219,4 +220,74 @@ test("preserves standard schema introspection", () => {
   ]);
 
   assert.equal(errors.length, 0);
+});
+
+/**
+ * Depth 4 is allowed.
+ * The root resolver executes once and returns the requested nested value.
+ */
+test("executes an operation at the depth limit", async () => {
+  let calls = 0;
+
+  const result = await executeWithQueryBudget({
+    schema: recursiveSchema,
+    document: parse(atLimit),
+    rootValue: {
+      node: () => {
+        calls += 1;
+
+        return {
+          child: {
+            child: {
+              child: {
+                name: "Leaf",
+              },
+            },
+          },
+        };
+      },
+    },
+  });
+
+  assert.equal(result.errors, undefined);
+  assert.equal(calls, 1);
+
+  assert.equal(
+    JSON.stringify(result.data),
+    JSON.stringify({
+      node: {
+        child: {
+          child: {
+            child: {
+              name: "Leaf",
+            },
+          },
+        },
+      },
+    }),
+  );
+});
+
+/**
+ * Depth 5 exceeds the limit of 4.
+ * Rejection must happen before even the root resolver executes.
+ */
+test("rejects excessive depth before resolver execution", async () => {
+  let calls = 0;
+
+  const result = await executeWithQueryBudget({
+    schema: recursiveSchema,
+    document: parse(beyondLimit),
+    rootValue: {
+      node: () => {
+        calls += 1;
+        return null;
+      },
+    },
+  });
+
+  assert.equal(result.data, undefined);
+  assert.ok(result.errors?.length);
+  assert.ok(result.errors.some((error) => /depth/i.test(error.message)));
+  assert.equal(calls, 0);
 });

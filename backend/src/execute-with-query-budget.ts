@@ -2,6 +2,7 @@ import {
   execute,
   getOperationAST,
   GraphQLError,
+  specifiedRules,
   validate,
   type ExecutionArgs,
   type ExecutionResult,
@@ -11,12 +12,16 @@ import {
   applicationCostEstimator,
   QUERY_COMPLEXITY_LIMIT,
 } from "./query-complexity.js";
+import { createDepthValidationRule } from "./query-depth.js";
 
 export async function executeWithQueryBudget(
   args: ExecutionArgs,
 ): Promise<ExecutionResult> {
   // KEEP STANDARD GRAPHQL VALIDATION BEFORE COST ANALYSIS.
-  const validationErrors = validate(args.schema, args.document);
+  const validationErrors = validate(args.schema, args.document, [
+    ...specifiedRules,
+    createDepthValidationRule(),
+  ]);
 
   if (validationErrors.length > 0) {
     return { errors: validationErrors };
