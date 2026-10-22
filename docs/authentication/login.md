@@ -161,7 +161,7 @@ replicas do not share counts. Express uses connection-derived `req.ip` with defa
 `trust proxy: false`; Docker may make clients share an address.
 
 The proposed 64 KiB JSON body cap is pending, not an implemented guarantee.
-Depth protection is deferred under ticket #32. Current authentication limits do
+[Depth protection](../query-depth.md) is implemented under ticket #32. Current authentication limits do
 not replace general depth, complexity, width, or response-size controls.
 
 ## Implementation map
@@ -204,3 +204,4 @@ stays cached for the request. Use separate operations for the documented flow.
 Keep passwords, password records, raw tokens, cookie headers, and sensitive
 GraphQL documents or variables out of logs and traces. An instrumentation audit
 remains a follow-up; using variables alone does not establish safe logging.
+
