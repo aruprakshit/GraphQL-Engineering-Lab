@@ -12,7 +12,8 @@
     "account:provision": "tsx src/auth/provision.ts",
     "dev": "node --watch --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import tsx/esm --import ./src/instrumentation.ts src/main.ts",
     "test": "node --import tsx/esm --test --test-concurrency=1 \"src/**/*.test.ts\"",
-    "test:integration": "node --import tsx/esm --test --test-concurrency=1 \"tests/integration/**/*.test.ts\""
+    "test:integration": "node --import tsx/esm --test --test-concurrency=1 \"tests/integration/**/*.test.ts\"",
+    "schema:baseline": "node --import tsx/esm src/schema/export-baseline.ts"
   },
   "keywords": [],
   "author": "",
