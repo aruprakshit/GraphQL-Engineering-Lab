@@ -35,7 +35,11 @@ jobs:
 
       - name: Check TypeScript
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
-        run: npm run typecheck 
+        run: npm run typecheck
+      
+      - name: Check schema compatibility
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run schema:check
   integration:
     name: MongoDB integration tests
     runs-on: ubuntu-latest
