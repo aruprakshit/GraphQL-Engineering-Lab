@@ -236,24 +236,25 @@ test("single-post visibility service", async (t) => {
         admin: await createSession(database, "admin"),
       };
 
-      const source = `
-    query FindPost($id: ID!) {
-      hello
-      post(id: $id) {
-        id
-        title
-        status
-        author {
-          id
-          name
+      const source = /* GraphQL */ `
+        query FindPost($id: ID!) {
+          hello
+          post(id: $id) {
+            id
+            title
+            status
+            author {
+              id
+              name
+            }
+          }
         }
-      }
-    }
-  `;
+      `;
 
       interface RequestOptions {
         database?: GraphQLContext["database"];
         authenticationDatabase?: GraphQLContext["database"];
+        source?: string;
       }
 
       async function executePost(
@@ -298,11 +299,93 @@ test("single-post visibility service", async (t) => {
         return graphql({
           schema,
           rootValue,
-          source,
+          source: options.source ?? source,
           variableValues: { id },
           contextValue: context,
         });
       }
+
+      /**
+       * Old clients keep using name. New clients use displayName.
+       * Both fields must read the same stored name without changing visibility.
+       */
+      await t.test("supports old and new public-user queries", async () => {
+        const oldQuery = /* GraphQL */ `
+          query OldClient($id: ID!) {
+            post(id: $id) {
+              author {
+                id
+                name
+              }
+            }
+          }
+        `;
+
+        const newQuery = /* GraphQL */ `
+          query NewClient($id: ID!) {
+            post(id: $id) {
+              author {
+                id
+                displayName
+              }
+            }
+          }
+        `;
+
+        const combinedQuery = /* GraphQL */ `
+          query MigratingClient($id: ID!) {
+            post(id: $id) {
+              author {
+                id
+                name
+                displayName
+              }
+            }
+          }
+        `;
+
+        const clients = [
+          {
+            source: oldQuery,
+            expectedAuthor: { id: "ada", name: "Ada" },
+          },
+          {
+            source: newQuery,
+            expectedAuthor: { id: "ada", displayName: "Ada" },
+          },
+          {
+            source: combinedQuery,
+            expectedAuthor: {
+              id: "ada",
+              name: "Ada",
+              displayName: "Ada",
+            },
+          },
+        ];
+
+        const requests = [
+          { session: null, id: "ada-published" },
+          { session: sessions.ada, id: "ada-draft" },
+        ];
+
+        for (const request of requests) {
+          for (const client of clients) {
+            const result = await executePost(request.session, request.id, {
+              source: client.source,
+            });
+
+            assert.equal(result.errors, undefined);
+            assert.equal(
+              JSON.stringify(result.data),
+              JSON.stringify({
+                post: {
+                  author: client.expectedAuthor,
+                },
+              }),
+            );
+          }
+        }
+      });
 
       // Purpose: Check visibility, public status enum, and author resolution for each caller.
       await t.test(

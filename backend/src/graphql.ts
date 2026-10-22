@@ -8,7 +8,8 @@ export const schema = buildSchema(/* GraphQL */ `
 
   type User {
     id: ID!
-    name: String!
+    name: String! @deprecated(reason: "Use displayName")
+    displayName: String!
   }
 
   type Post {

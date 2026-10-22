@@ -1,0 +1,80 @@
+enum AccountRole {
+  ADMIN
+  USER
+}
+
+type AuthUser {
+  id: ID!
+  name: String!
+  role: AccountRole!
+}
+
+input CreateDraftInput {
+  title: String!
+}
+
+type LearningCheck {
+  id: ID!
+  message: String!
+}
+
+input LoginInput {
+  password: String!
+  username: String!
+}
+
+type LoginPayload {
+  user: AuthUser!
+}
+
+type Mutation {
+  createDraft(input: CreateDraftInput!): Post
+  login(input: LoginInput!): LoginPayload
+  logout: Boolean
+  publishPost(id: ID!): Post
+  updatePost(id: ID!, input: UpdatePostInput!): Post
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
+}
+
+type Post {
+  author: User
+  id: ID!
+  status: PostStatus!
+  title: String!
+}
+
+type PostConnection {
+  edges: [PostEdge!]!
+  pageInfo: PageInfo!
+}
+
+type PostEdge {
+  cursor: String!
+  node: Post!
+}
+
+enum PostStatus {
+  DRAFT
+  PUBLISHED
+}
+
+type Query {
+  hello: String!
+  learningCheck(id: ID!): LearningCheck
+  me: AuthUser
+  post(id: ID!): Post
+  posts(after: String, first: Int = 5, status: PostStatus): PostConnection!
+}
+
+input UpdatePostInput {
+  title: String!
+}
+
+type User {
+  id: ID!
+  name: String!
+}
