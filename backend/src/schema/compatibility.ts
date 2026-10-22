@@ -29,5 +29,9 @@ export function compareSchemas(
   return {
     breakingChanges: changes.filter((change) => breakingTypes.has(change.type)),
     reviewChanges: changes.filter((change) => reviewTypes.has(change.type)),
+    informationalChanges: changes.filter(
+      (change) =>
+        !breakingTypes.has(change.type) && !reviewTypes.has(change.type),
+    ),
   };
 }

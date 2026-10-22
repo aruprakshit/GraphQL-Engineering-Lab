@@ -22,6 +22,7 @@ test("accepts an unchanged schema", () => {
 
   assert.deepEqual(report.breakingChanges, []);
   assert.deepEqual(report.reviewChanges, []);
+  assert.deepEqual(report.informationalChanges, []);
 });
 
 /**
@@ -45,6 +46,9 @@ test("allows an additive field and deprecation", () => {
   const report = compareSchemas(baseline, candidate);
 
   assert.deepEqual(report.breakingChanges, []);
+  assert.ok(
+    report.informationalChanges.some((change) => change.type === "FIELD_ADDED"),
+  );
 });
 
 /**

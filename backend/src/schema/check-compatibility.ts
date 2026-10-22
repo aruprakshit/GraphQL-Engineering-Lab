@@ -10,6 +10,10 @@ const baseline = buildSchema(baselineSource);
 
 const report = compareSchemas(baseline, schema);
 
+for (const change of report.informationalChanges) {
+  console.log(`INFO ${change.type}: ${change.description}`);
+}
+
 for (const change of report.reviewChanges) {
   console.warn(`REVIEW ${change.type}: ${change.description}`);
 }

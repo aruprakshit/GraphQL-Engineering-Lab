@@ -14,6 +14,7 @@ async function resolvePostAuthor(authorId: string, context: GraphQLContext) {
     return {
       id: user._id,
       name: user.name,
+      displayName: user.name,
     };
   } catch {
     throw new GraphQLError("Database temporarily unavailable", {
