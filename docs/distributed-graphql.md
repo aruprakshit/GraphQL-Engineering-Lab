@@ -82,6 +82,115 @@ The user service owns access rules for the profile data it exposes. For this fir
 
 The GraphQL application combines the results into the public schema. Public profile data must not be used as a substitute for trusted session identity or authorization decisions.
 
+## Batch lookup contract
+
+The proposed user-service endpoint is `POST /internal/users/batch`. Our public client still sends GraphQL operations to Express. This HTTP endpoint is an internal dependency used by the GraphQL application's DataLoader.
+
+### Request
+
+```http
+POST /internal/users/batch
+Content-Type: application/json
+```
+
+```json
+{
+  "ids": ["user-3", "missing-user", "user-1"]
+}
+```
+
+Initial validation rules:
+
+- Require a JSON object containing only `ids`.
+- Require `ids` to be an array with 1 to 100 entries.
+- Require each ID to be a nonempty string of at most 256 characters.
+- Treat IDs as opaque values: do not trim them or change their case.
+- Allow repeated IDs; deduplicate them before querying storage.
+- Bound the JSON request body to 32 KiB.
+
+The 100-entry bound limits work per service call. It is an initial learning-project policy, not a measured capacity limit. Configure DataLoader's `maxBatchSize` to match it when implementing delegation. Larger batches must be split rather than sent as oversized requests.
+
+### Successful response
+
+```json
+{
+  "users": [
+    { "id": "user-1", "displayName": "Ada" },
+    { "id": "user-3", "displayName": "Linus" }
+  ]
+}
+```
+
+Return HTTP 200 with the existing requested profiles. Missing IDs are omitted; if none exist, return `{ "users": [] }`.
+
+Each returned ID appears at most once and must have been requested. Response order is unspecified. Each profile contains only `id` and `displayName`, both strings. The user service maps its stored `name` to `displayName`; storage documents and authentication fields do not cross this boundary.
+
+The GraphQL application validates the response before using it. Invalid JSON, malformed profiles, duplicate response IDs, and unrequested IDs are dependency failures, not evidence that users are missing.
+
+### Mapping back to DataLoader keys
+
+The batch function maps profiles by ID and then reconstructs the requested order:
+
+```text
+Batch keys:       [user-3, missing-user, user-1]
+Service response: [Ada/user-1, Linus/user-3]
+Batch results:    [Linus/user-3, null, Ada/user-1]
+```
+
+A missing profile produces `null` for that key. An unavailable service rejects the batch: it must not return an array of nulls that disguises an outage as missing data.
+
+The public GraphQL schema continues to support both `User.name` and `User.displayName`. Its mapper can populate both fields from the service's `displayName` during the existing deprecation period.
+
+### Endpoint outcomes
+
+| Situation | HTTP status | Meaning |
+| --- | --- | --- |
+| Valid lookup, including missing IDs | 200 | Requested existing profiles are returned |
+| Invalid request shape, IDs, or batch size | 400 | Caller must correct the request |
+| Body exceeds 32 KiB | 413 | Caller must send a smaller body |
+| Unsupported request content type | 415 | Caller must send JSON |
+| Profile storage is unavailable | 503 | Dependency failed; no successful lookup result |
+| Unexpected server failure | 500 | Internal failure; no successful lookup result |
+
+Error responses use a generic envelope, for example:
+
+```json
+{
+  "error": {
+    "code": "SERVICE_UNAVAILABLE",
+    "message": "User service temporarily unavailable"
+  }
+}
+```
+
+Do not include database details, credentials, or session tokens in responses. Internal service access controls, deadlines, and GraphQL error mapping are defined in the next checkpoint; the `/internal` path alone does not restrict access.
+
+### Request sequence
+
+```mermaid
+sequenceDiagram
+    participant C as GraphQL client
+    participant G as Express GraphQL application
+    participant P as Post service
+    participant L as User DataLoader
+    participant U as User service
+    participant D as Profile storage
+
+    C->>G: Query posts and authors
+    G->>P: Read visible posts
+    P-->>G: Posts with author IDs
+    G->>L: Load author IDs during resolver execution
+    L->>U: POST batch of unique IDs
+    U->>D: Find requested profiles
+    D-->>U: Existing profiles
+    U-->>L: Profiles in unspecified order
+    L->>L: Map profiles to batch key order
+    L-->>G: Profile or null for each key
+    G-->>C: GraphQL response
+```
+
+This is the successful lookup path. The next checkpoint defines how failures affect nullable and non-null GraphQL fields.
+
 ## Next design decisions
 
 - Batch lookup request and response format.
@@ -90,3 +199,4 @@ The GraphQL application combines the results into the public schema. Public prof
 - GraphQL nullability and partial responses.
 - Trace-context propagation.
 - Internal service access and deployment configuration.
+
