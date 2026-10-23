@@ -1,14 +1,7 @@
-import express from "express";
+import { createApp } from "./app.js";
 
-const app = express();
+const app = createApp();
 const port = 4001;
-
-app.get("/health", (_request, response) => {
-  response.json({
-    status: "ok",
-    service: "graphql-user-service",
-  });
-});
 
 app.listen(port, "0.0.0.0", () => {
   console.log(`User service listening on port ${port}`);
