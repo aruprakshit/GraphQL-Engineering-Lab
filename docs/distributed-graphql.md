@@ -201,12 +201,12 @@ Initial client policy:
 
 - Send one attempt per batch, with no automatic retry.
 - Abort the outgoing request when its deadline expires.
-- Bound response bodies to 64 KiB, enforcing the limit while reading even when Content-Length is absent or incorrect.
+- Bound response bodies to 256 KiB, enforcing the limit while reading even when Content-Length is absent or incorrect.
 - Validate the response before resolving any batch results.
 - Treat network errors, non-200 responses, invalid responses, and exceeded deadlines as dependency failures.
 - Do not replace dependency failures with empty successful results.
 
-The response limit is a starting policy that must be checked against supported profile lengths before implementation. The service contract will need a display-name length bound so valid maximum-size batches fit the response budget.
+The response budget assumes the profile bounds defined below. Validate those bounds in the service and verify maximum-size serialized responses in tests before implementation is enabled.
 
 Retries can multiply load during an outage. We will first make failure behavior predictable before considering bounded retries or a circuit breaker.
 
@@ -430,8 +430,89 @@ Local container-to-container HTTP is the learning setup. A deployment across unt
 
 These checks remain planned until implementation.
 
-## Next design decisions
+## Profile bounds and payload budgets
 
-- Profile length bounds and final response-budget alignment.
-- Transitional profile storage and its separation from authentication data.
-- Service delegation versus federation tradeoffs.
+Initial profile contract:
+
+- `id` is a nonempty string of at most 256 JavaScript UTF-16 code units, matching request-ID validation.
+- `displayName` is a nonempty string whose UTF-8 encoding is at most 128 bytes.
+- Return only those two fields in each profile object.
+- Return at most one profile per unique requested ID and at most 100 profiles.
+
+The display name is a public label, not a credential or authorization input. Validate existing stored names before enabling this endpoint. An invalid stored profile is a service failure, not a missing user; do not truncate names silently or change existing authentication behavior as part of this exercise.
+
+The 256 KiB response limit allows room for JSON escaping at these bounds. A conservative estimate allows six ASCII bytes per ID code unit and six bytes per display-name UTF-8 byte:
+
+```text
+ID allowance per profile:       256 x 6 = 1,536 bytes
+Name allowance per profile:     128 x 6 =   768 bytes
+Values for 100 profiles: 100 x 2,304 = 230,400 bytes
+Remaining response budget:       262,144 - 230,400 = 31,744 bytes
+```
+
+The remaining space covers the fixed object keys, punctuation, and envelope in compact JSON. Test the actual serializer with boundary inputs; this estimate does not replace enforcing the byte limit while reading.
+
+The 32 KiB request limit is an independent aggregate bound. Some arrays containing 100 individually valid IDs can exceed it after JSON escaping. The client must split batches to satisfy both the entry count and serialized request-body byte limit, or fail safely if one entry cannot fit. `maxBatchSize: 100` addresses only the count bound.
+
+These are deliberately explicit learning-project limits. Revisit them with real profile requirements and measurements rather than treating them as universal defaults.
+
+## Transitional storage ownership
+
+Current authentication code reads `users` during credential verification, account provisioning, and session resolution. The seed command also writes that collection. Moving public author lookups to another process does not automatically remove these dependencies.
+
+For the first implementation:
+
+| Operation | Initial owner or access path |
+| --- | --- |
+| Read authors for post GraphQL fields | User service through batch HTTP lookup |
+| Read profiles for existing authentication behavior | Existing application code, directly from users |
+| Read and write credentials and sessions | Existing authentication code |
+| Seed user profiles | Existing seed command |
+| Read and mutate posts | Existing post service |
+
+Both processes initially use the same local MongoDB database, with the user service reading the existing `users` collection. Do not copy profile data into a second collection, introduce synchronization, or move credentials during this first exercise.
+
+The user-service query projects only profile fields. This application-level restriction is not database-level isolation: a shared unrestricted MongoDB connection would still permit broader access. Separate database credentials and permissions are future hardening work.
+
+This is a service-call extraction with transitional shared storage, not complete independent data ownership. A later ownership migration must decide how authentication gets its required identity information, who writes profiles, and how account lifecycle changes remain consistent. Do not add a user-service dependency to login or session resolution implicitly.
+
+## Why start with explicit delegation?
+
+Our first design keeps one public GraphQL schema in Express. Its author resolver delegates public-profile lookup through DataLoader to an internal HTTP endpoint. The user service does not need to expose GraphQL for this exercise.
+
+| Concern | Explicit service delegation in this project | Apollo Federation alternative |
+| --- | --- | --- |
+| Public schema | Defined in the existing GraphQL application | Composed from subgraph schemas |
+| Cross-service lookup | Our loader and HTTP client choose batch calls | A router plans calls using the composed schema |
+| Shared object identity | Our lookup contract uses user IDs | Entity keys describe identity across subgraphs |
+| Schema coordination | Application schema and internal contract are reviewed together | Composition checks whether subgraph schemas can form a valid supergraph |
+| Batching | We implement and verify it | Entity resolvers may still need DataLoader |
+| Operational work | One additional service plus client configuration | Subgraphs, composition, router configuration, and compatibility checks |
+| Failure controls | We define deadlines, errors, authorization, and tracing | Those policies still require deliberate design across components |
+
+Federation's composition combines subgraph schemas with routing metadata. Entity keys allow a router to associate fields belonging to the same object across subgraphs. These mechanisms address schema and ownership coordination; they do not eliminate N+1 inside a reference resolver. See Apollo's [schema composition documentation](https://www.apollographql.com/docs/graphos/schema-design/federated-schemas/composition) and [entity documentation](https://www.apollographql.com/docs/graphos/schema-design/federated-schemas/entities/intro).
+
+Our decision is to learn the network boundary explicitly first: batching, deadlines, partial failure, tracing, and service credentials. Federation is a useful later exercise when we want to explore schema composition and ownership across GraphQL subgraphs. It is not required simply because a resolver calls another service.
+
+## Design walkthrough
+
+| Scenario | Planned behavior |
+| --- | --- |
+| Successful posts query | Local visibility filtering, then bounded profile batches; results mapped by ID |
+| Five posts share three authors | Three unique IDs in one batch when calls share a batching window and fit both limits |
+| One author profile is missing | That author is null without a dependency error |
+| User service is unavailable | Affected authors are null with SERVICE_UNAVAILABLE; other selected post fields remain |
+| Query selects no author field | No profile-service request |
+| Caller lacks the service credential | Internal endpoint returns 401 before database lookup |
+
+## Next implementation checkpoints
+
+This ticket remains design-only. Review and commit the design before opening the implementation work.
+
+1. Build the bounded user batch endpoint with service-token verification and tests.
+2. Add it to Docker Compose and initialize its tracing before application imports.
+3. Implement a bounded HTTP client with response validation, deadline handling, and propagated trace context.
+4. Adapt the request-scoped author loader and shared public-user mapper, preserving the public schema.
+5. Test missing profiles, service outages, invalid responses, payload limits, and tracing across processes.
+
+Each checkpoint should be small enough to review and verify independently. Existing authentication and post-authorization tests must continue to pass when implementation begins.
