@@ -313,9 +313,125 @@ For `Query.post: Post`, the nullable root post field would stop propagation and 
 
 These are planned checks, not completed implementation tests.
 
+## Trace propagation
+
+Both processes will export traces to the existing Jaeger container. Use distinct service names:
+
+| Process | Planned OTEL_SERVICE_NAME |
+| --- | --- |
+| GraphQL application | graphql-engineering-lab |
+| User service | graphql-user-service |
+
+The trace ID connects the whole request. Each operation gets its own span ID. Do not create a new independent root trace for the user-service call.
+
+```mermaid
+sequenceDiagram
+    participant G as GraphQL application
+    participant L as User DataLoader
+    participant U as User service
+    participant D as Profile storage
+    participant J as Jaeger
+
+    G->>L: Resolve authors in active trace
+    L->>U: Batch HTTP request with traceparent
+    Note over U: Extract remote parent context
+    U->>D: Read public profiles
+    D-->>U: Profiles
+    U-->>L: Batch response
+    G-->>J: Export GraphQL spans
+    U-->>J: Export user-service spans
+    Note over J: One trace across two service names
+```
+
+Planned span hierarchy:
+
+```text
+POST /graphql                            GraphQL application
+  request handler
+    graphql.posts
+      MongoDB posts lookup
+    dataloader.users.batch
+      outgoing HTTP batch request
+        POST /internal/users/batch       User service
+          MongoDB profile lookup
+```
+
+This is a conceptual hierarchy; automatic instrumentation may introduce additional middleware spans.
+
+The outgoing request propagates W3C `traceparent` and, when present, `tracestate`. The user service extracts the context before handling the request. Use OpenTelemetry propagation APIs or verified automatic instrumentation rather than constructing these headers manually. Do not forward arbitrary inbound headers or baggage to the dependency.
+
+The current application configures HTTP, Express, and MongoDB instrumentation. That alone is not evidence that a future HTTP client is instrumented. Choose the client during implementation, verify propagation with that client, and avoid creating duplicate client spans through both manual and automatic instrumentation.
+
+Initialize telemetry before loading instrumented application libraries in each process, following the existing [local tracing setup](tracing.md).
+
+### Useful span attributes and logs
+
+Record bounded operational details:
+
+- Batch input count and unique ID count.
+- Returned profile count.
+- Configured deadline in milliseconds.
+- Dependency outcome: success, timeout, network failure, HTTP failure, or invalid response.
+- HTTP response status when one exists.
+
+Do not attach passwords, raw session cookies, internal service credentials, full bodies, or author ID lists to new dependency spans. Counts are sufficient for batching verification. Avoid including credentials in exception messages or logged request headers.
+
+Each service may generate its own local request ID. Correlate requests across services with the trace ID; request IDs do not need to be equal. An HTTP 200 GraphQL response can still contain resolver errors, so record the failed batch span independently of HTTP status.
+
+Trace export remains best effort. A Jaeger outage must not turn a successful profile lookup into an application failure.
+
+## Internal service access and Docker deployment
+
+The proposed user service listens on port 4001 inside Docker and is addressed by Compose service name:
+
+```text
+GraphQL application -> http://user-service:4001/internal/users/batch
+```
+
+Do not use `localhost:4001` from the backend container: that address refers to the backend container itself.
+
+Deployment plan:
+
+- Add a `user-service` Compose service without a host `ports` mapping.
+- Keep the GraphQL application as the browser-facing entry point.
+- Configure the service base URL through the backend environment, not GraphQL inputs.
+- Keep credentials and sessions in the existing application ownership boundary.
+- Give the user service access only to the profile storage it needs when storage permissions are introduced.
+- Keep the existing MongoDB server for the local exercise; document any transitional shared storage explicitly before coding.
+
+A missing host port mapping limits direct host access but does not authenticate callers. Containers sharing a reachable network may still call the endpoint. CORS and an `/internal` URL prefix are not service authentication.
+
+### Initial service credential
+
+For this local exercise, require a separate shared service token in the batch request's `Authorization: Bearer ...` header. This is a service credential, not a user's session token and not a JWT.
+
+- Supply the same dedicated token to the backend client and user-service verifier through local environment configuration.
+- Keep its value out of Git, documentation examples, logs, traces, and public GraphQL responses.
+- Fail service startup when the required token is missing; do not silently permit anonymous internal requests.
+- Reject missing or invalid tokens with HTTP 401 before profile lookup.
+- Do not forward browser cookies or browser Authorization headers to the user service.
+- Map an upstream 401 to the generic GraphQL dependency error; clients cannot repair an internal credential mismatch by logging in again.
+
+The token authenticates the calling service only. It grants no user role and does not replace post authorization.
+
+Local container-to-container HTTP is the learning setup. A deployment across untrusted networks needs protected transport and an appropriate service-identity and secret-management mechanism. The shared-token exercise is not a complete production deployment design.
+
+### Verification checkpoint
+
+| Scenario | Expected evidence |
+| --- | --- |
+| Query selects authors | One trace includes GraphQL and user-service spans under different service names |
+| Repeated author IDs | Batch counts show deduplication; HTTP calls correspond to batches |
+| User-service request logs | Local request ID and the same trace ID as the originating GraphQL request |
+| Missing or invalid service token | HTTP 401 and no profile database lookup |
+| Internal credential mismatch | GraphQL author dependency error, without leaking credential details |
+| Jaeger unavailable | API behavior remains independent of trace export |
+| Inspect Compose configuration | No user-service host port published; secrets are not committed |
+
+These checks remain planned until implementation.
+
 ## Next design decisions
 
 - Profile length bounds and final response-budget alignment.
-- Trace-context propagation and useful dependency span attributes.
-- Internal service access and Docker deployment configuration.
+- Transitional profile storage and its separation from authentication data.
 - Service delegation versus federation tradeoffs.
