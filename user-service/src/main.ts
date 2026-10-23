@@ -1,4 +1,7 @@
 import { createApp } from "./app.js";
+import { readConfig } from "./config.js";
+
+readConfig();
 
 const app = createApp();
 const port = 4001;
