@@ -191,12 +191,131 @@ sequenceDiagram
 
 This is the successful lookup path. The next checkpoint defines how failures affect nullable and non-null GraphQL fields.
 
+## Deadlines and failure behavior
+
+Each outgoing user-service batch lookup gets a 500 ms deadline. This is an initial local-development policy, not a production latency target derived from measurements.
+
+The deadline covers the HTTP request, reading the response body, and asynchronous response processing until the lookup settles. Keep the abort timer active while reading the body, and clear it in `finally`. An abort signal cancels cooperative network work; it cannot preempt synchronous JavaScript such as JSON parsing. Bounded response sizes keep that work limited.
+
+Initial client policy:
+
+- Send one attempt per batch, with no automatic retry.
+- Abort the outgoing request when its deadline expires.
+- Bound response bodies to 64 KiB, enforcing the limit while reading even when Content-Length is absent or incorrect.
+- Validate the response before resolving any batch results.
+- Treat network errors, non-200 responses, invalid responses, and exceeded deadlines as dependency failures.
+- Do not replace dependency failures with empty successful results.
+
+The response limit is a starting policy that must be checked against supported profile lengths before implementation. The service contract will need a display-name length bound so valid maximum-size batches fit the response budget.
+
+Retries can multiply load during an outage. We will first make failure behavior predictable before considering bounded retries or a circuit breaker.
+
+This deadline applies to each user-service call. It is not a complete GraphQL operation timeout and does not cap every other resolver or database operation.
+
+## GraphQL nullability and partial responses
+
+The existing application schema declares:
+
+```graphql
+type Post {
+  id: ID!
+  title: String!
+  author: User
+  status: PostStatus!
+}
+```
+
+`author` is nullable because it has no exclamation mark. GraphQL can therefore return a post even when its author is unavailable.
+
+| Lookup outcome | Author field | GraphQL errors |
+| --- | --- | --- |
+| Profile exists | Public user object | None from the lookup |
+| Valid response omits the requested ID | null | None from the lookup |
+| Deadline exceeded | null | SERVICE_UNAVAILABLE at the author field path |
+| Network error or non-200 response | null | SERVICE_UNAVAILABLE at the author field path |
+| Malformed or oversized response | null | SERVICE_UNAVAILABLE at the author field path |
+
+During delegation, update the author resolver's current database-specific error message to a generic dependency message such as `Author information temporarily unavailable`. Preserve the `SERVICE_UNAVAILABLE` code, and keep internal failure details in observability data rather than the public error.
+
+### Missing profile example
+
+For a query selecting a post's ID, title, and author, an absent profile produces a normal null result:
+
+```json
+{
+  "data": {
+    "post": {
+      "id": "post-1",
+      "title": "Learning GraphQL",
+      "author": null
+    }
+  }
+}
+```
+
+### Dependency failure example
+
+An unavailable service also leaves the author null, but includes an error so clients can distinguish failure from missing data:
+
+```json
+{
+  "errors": [
+    {
+      "message": "Author information temporarily unavailable",
+      "path": ["post", "author"],
+      "extensions": { "code": "SERVICE_UNAVAILABLE" }
+    }
+  ],
+  "data": {
+    "post": {
+      "id": "post-1",
+      "title": "Learning GraphQL",
+      "author": null
+    }
+  }
+}
+```
+
+Locations are omitted from this illustrative response. A list query identifies the affected author with a path such as `["posts", "edges", 0, "node", "author"]`. Aliases change the corresponding response-path names.
+
+One failed batch can affect several author fields. GraphQL may report an error at each affected field path, even though the loader made only one failed HTTP request. Successful post data and unrelated fields remain available.
+
+HTTP 200 alone does not establish GraphQL success: clients and load tests must inspect the `errors` array as well as `data`.
+
+### What if author were non-null?
+
+Changing the field to `author: User!` would change its failure boundary. GraphQL propagates a null or resolver error upward until it reaches a nullable field.
+
+For the current connection shape:
+
+```text
+Post.author: User!             hypothetical non-null author
+PostEdge.node: Post!           cannot contain the null post
+PostConnection.edges: [PostEdge!]!  cannot contain a null edge
+Query.posts: PostConnection!   cannot contain a null connection
+Result: data becomes null for the operation
+```
+
+For `Query.post: Post`, the nullable root post field would stop propagation and become null instead. Keeping `author: User` preserves useful post data during a profile-service failure without changing the existing schema.
+
+## Failure verification plan
+
+| Scenario | Expected evidence |
+| --- | --- |
+| Repeated author IDs | Deduplicated IDs in each batch; results map to original keys |
+| One requested profile is missing | Only that author is null; no dependency error |
+| Service responds after the deadline | Lookup is aborted; affected authors are null with errors |
+| Service cannot be reached | Same public dependency error; post fields remain available |
+| Service returns invalid JSON or profile data | Batch fails rather than silently treating profiles as missing |
+| Response exceeds the byte limit | Reading stops and the batch fails |
+| One batch fails for several posts | Error paths identify affected authors; no request per post |
+| Query does not select author | No user-service lookup |
+
+These are planned checks, not completed implementation tests.
+
 ## Next design decisions
 
-- Batch lookup request and response format.
-- Missing-profile behavior.
-- Timeout and service-unavailable behavior.
-- GraphQL nullability and partial responses.
-- Trace-context propagation.
-- Internal service access and deployment configuration.
-
+- Profile length bounds and final response-budget alignment.
+- Trace-context propagation and useful dependency span attributes.
+- Internal service access and Docker deployment configuration.
+- Service delegation versus federation tradeoffs.
