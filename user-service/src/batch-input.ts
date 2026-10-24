@@ -1,6 +1,19 @@
-export interface BatchInput {
-  ids: string[];
-}
+import * as z from "zod";
+
+const batchInputSchema = z.strictObject({
+  ids: z
+    .array(
+      z
+        .string()
+        .refine((value) => value.length >= 1 && value.length <= 256, {
+          message: "ID must contain 1 to 256 UTF-16 code units",
+        }),
+    )
+    .min(1)
+    .max(100),
+});
+
+export type BatchInput = z.infer<typeof batchInputSchema>;
 
 export class InvalidBatchInputError extends Error {
   constructor() {
@@ -12,31 +25,11 @@ export class InvalidBatchInputError extends Error {
 }
 
 export function parseBatchInput(input: unknown): BatchInput {
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+  const result = batchInputSchema.safeParse(input);
+
+  if (!result.success) {
     throw new InvalidBatchInputError();
   }
 
-  const fields = Object.keys(input);
-
-  if (fields.length !== 1 || fields[0] !== "ids") {
-    throw new InvalidBatchInputError();
-  }
-
-  const ids = (input as Record<string, unknown>).ids;
-
-  if (!Array.isArray(ids) || ids.length < 1 || ids.length > 100) {
-    throw new InvalidBatchInputError();
-  }
-
-  const validatedIds: string[] = [];
-
-  for (const id of ids) {
-    if (typeof id !== "string" || id.length < 1 || id.length > 256) {
-      throw new InvalidBatchInputError();
-    }
-
-    validatedIds.push(id);
-  }
-
-  return { ids: validatedIds };
+  return result.data;
 }

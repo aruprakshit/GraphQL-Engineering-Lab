@@ -1,17 +1,23 @@
-export interface ServiceConfig {
-  serviceToken: string;
-}
+import * as z from "zod";
+
+const serviceConfigSchema = z.object({
+  serviceToken: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+export type ServiceConfig = z.infer<typeof serviceConfigSchema>;
 
 export function readConfig(
   environment: NodeJS.ProcessEnv = process.env,
 ): ServiceConfig {
-  const serviceToken = environment.USER_SERVICE_TOKEN;
+  const result = serviceConfigSchema.safeParse({
+    serviceToken: environment.USER_SERVICE_TOKEN,
+  });
 
-  if (!serviceToken || !/^[a-f0-9]{64}$/.test(serviceToken)) {
+  if (!result.success) {
     throw new Error(
       "USER_SERVICE_TOKEN must contain exactly 64 lowercase hexadecimal characters",
     );
   }
 
-  return { serviceToken };
+  return result.data;
 }
