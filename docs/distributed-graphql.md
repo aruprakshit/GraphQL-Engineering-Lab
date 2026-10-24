@@ -6,7 +6,7 @@ Explore how our Express GraphQL API retrieves data across service boundaries whi
 
 We will begin with explicit service calls. Federation remains a design comparison for a later checkpoint.
 
-This document describes the proposed design. Service delegation is not implemented yet.
+The internal user service is implemented in issue #63. The GraphQL author loader still reads MongoDB directly; the bounded outgoing HTTP client and GraphQL delegation remain planned. This document includes both the implemented endpoint contract and the future delegation design.
 
 ## Proposed ownership
 
@@ -23,7 +23,7 @@ A public profile lookup must not become a way to retrieve password hashes or gra
 
 ## Current flow
 
-All data access currently happens within one application.
+GraphQL requests still access their data within the existing application. The separate user service can now handle direct internal batch requests, but GraphQL does not call it yet.
 
 ```mermaid
 flowchart LR
@@ -311,13 +311,13 @@ For `Query.post: Post`, the nullable root post field would stop propagation and 
 | One batch fails for several posts | Error paths identify affected authors; no request per post |
 | Query does not select author | No user-service lookup |
 
-These are planned checks, not completed implementation tests.
+These are delegation acceptance scenarios. The endpoint and MongoDB lookup already have tests described below; outgoing deadline handling, loader delegation, and GraphQL partial-failure behavior still require implementation and verification.
 
 ## Trace propagation
 
 Both processes will export traces to the existing Jaeger container. Use distinct service names:
 
-| Process | Planned OTEL_SERVICE_NAME |
+| Process | Configured OTEL_SERVICE_NAME |
 | --- | --- |
 | GraphQL application | graphql-engineering-lab |
 | User service | graphql-user-service |
@@ -428,7 +428,7 @@ Local container-to-container HTTP is the learning setup. A deployment across unt
 | Jaeger unavailable | API behavior remains independent of trace export |
 | Inspect Compose configuration | No user-service host port published; secrets are not committed |
 
-These checks remain planned until implementation.
+The internal endpoint has authentication and lookup tests. Cross-service trace continuity and GraphQL error mapping remain planned until the backend delegates author lookups. Configuration alone does not establish that the operational tracing checks have passed.
 
 ## Profile bounds and payload budgets
 
@@ -514,15 +514,76 @@ Our decision is to learn the network boundary explicitly first: batching, deadli
 | Query selects no author field | No profile-service request |
 | Caller lacks the service credential | Internal endpoint returns 401 before database lookup |
 
-## Next implementation checkpoints
+## Implemented user service: issue #63
 
-This ticket remains design-only. Review and commit the design before opening the implementation work.
+The `user-service/` directory contains a separate Express TypeScript application with its own package lock, dependency volume, formatting scripts, and tests.
 
-1. Build the bounded user batch endpoint with service-token verification and tests.
-2. Add it to Docker Compose and initialize its tracing before application imports.
-3. Implement a bounded HTTP client with response validation, deadline handling, and propagated trace context.
-4. Adapt the request-scoped author loader and shared public-user mapper, preserving the public schema.
-5. Test missing profiles, service outages, invalid responses, payload limits, and tracing across processes.
+| Component | Responsibility |
+| --- | --- |
+| src/config.ts | Zod validation of the service token and MongoDB configuration |
+| src/service-auth.ts | Authenticate exactly one Bearer header before parsing or lookup |
+| src/json-body.ts | Require JSON and parse a bounded, uncompressed body |
+| src/batch-input.ts | Validate the strict input object and bounded ID array with Zod |
+| src/profiles.ts | Deduplicate IDs, project public profile fields, validate stored data, and map the response |
+| src/batch-route.ts | Compose the request pipeline, enforce response size, and map generic HTTP errors |
+| src/app.ts | Create the Express application without starting a server |
+| src/main.ts | Connect MongoDB, listen on port 4001, and coordinate shutdown |
+| src/instrumentation.ts | Initialize HTTP, Express, and MongoDB tracing and export to Jaeger |
 
-Each checkpoint should be small enough to review and verify independently. Existing authentication and post-authorization tests must continue to pass when implementation begins.
+The database connection is established and pinged before the HTTP server listens. On normal signal-driven shutdown, the server stops accepting requests and finishes active requests, then closes MongoDB and flushes telemetry. Shutdown is not currently bounded by an application-level deadline. `/health` reports process liveness; it does not ping MongoDB on every request.
 
+### Local configuration and operation
+
+Configure `USER_SERVICE_TOKEN` in the root ignored `.env` file. Its value must contain 64 lowercase hexadecimal characters. Do not commit its value. Compose supplies MongoDB settings and tracing environment values to the user-service container.
+
+```sh
+docker compose up -d mongo jaeger user-service
+docker compose logs --tail=30 user-service
+```
+
+The user service has no published host port. Backend containers can reach `http://user-service:4001`; requests made inside the user-service container can use `http://127.0.0.1:4001`.
+
+Changing Compose environment settings requires recreating the container, not just reloading a TypeScript file:
+
+```sh
+docker compose up -d --force-recreate user-service
+```
+
+### Implemented HTTP outcomes
+
+| Outcome | Status and public code |
+| --- | --- |
+| Valid lookup, including no matching profiles | 200 with a users array |
+| Missing, malformed, duplicate, or incorrect Authorization header | 401 UNAUTHORIZED |
+| Invalid JSON or batch input | 400 INVALID_INPUT |
+| Request body exceeds 32 KiB | 413 PAYLOAD_TOO_LARGE |
+| Unsupported content type, charset, or compressed body | 415 UNSUPPORTED_MEDIA_TYPE |
+| MongoDB driver error | 503 SERVICE_UNAVAILABLE |
+| Invalid stored profile, oversized result, or unexpected error | 500 INTERNAL_SERVER_ERROR |
+
+The route currently groups all `MongoError` instances as 503; it does not distinguish transient outages from every other database-driver error. Public responses never echo the database exception. An invalid profile fails the whole batch under the accepted tradeoff above.
+
+### Automated coverage and CI
+
+Unit and HTTP-route tests cover configuration, token handling, batch-input validation, middleware ordering, rejection before lookup, successful responses, generic failure responses, and the response-size guard.
+
+MongoDB integration tests use the existing isolated `test-mongo` container and a unique database per run. They cover public-field mapping, duplicate and missing IDs, UTF-8 name boundaries, corrupt profiles, and HTTP application wiring. Cleanup drops the generated test database rather than the development database.
+
+```sh
+docker compose exec user-service npm run format:check
+docker compose exec user-service npm run typecheck
+docker compose exec user-service npm test
+docker compose --profile test run --rm user-service-integration-tests
+```
+
+The workflow defines separate user-service jobs for formatting and TypeScript, unit tests, and MongoDB integration tests. They install from the user service's own lockfile. Tests provide their own credentials and import the application without starting main.ts or preloading telemetry, so these jobs need neither the real service token nor Jaeger. Confirm the workflow is valid and all jobs pass before merging; documenting the jobs is not evidence of a successful CI run.
+
+For manual tracing verification, issue an authenticated batch request and search Jaeger for `graphql-user-service`. Expect an incoming HTTP span and its MongoDB lookup. A single trace spanning the backend and user service is not enabled by this ticket.
+
+## Remaining delegation checkpoints
+
+1. Implement the backend's bounded HTTP client with response validation, a deadline, request-size-aware batching, and propagated trace context.
+2. Adapt the request-scoped author loader and shared public-user mapper while preserving the public schema.
+3. Verify missing profiles, outages, invalid responses, payload limits, GraphQL partial responses, and one trace across both services.
+
+Existing authentication and post-authorization behavior stays in the backend. Per-ID error outcomes and federation implementation are outside the current scope.
