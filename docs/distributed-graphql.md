@@ -476,6 +476,15 @@ The user-service query projects only profile fields. This application-level rest
 
 This is a service-call extraction with transitional shared storage, not complete independent data ownership. A later ownership migration must decide how authentication gets its required identity information, who writes profiles, and how account lifecycle changes remain consistent. Do not add a user-service dependency to login or session resolution implicitly.
 
+
+### Tradeoff: invalid profiles fail the entire batch
+
+The service validates every returned profile before returning a successful batch. If five profiles are valid and one is invalid, the lookup rejects the entire batch; it does not return the five valid profiles.
+
+This keeps the service contract simple and prevents corrupt data from being silently represented as a missing user. The cost is reduced failure isolation: all author fields depending on that failed batch receive dependency errors, even if some underlying profiles are valid. Nullable author fields still preserve the surrounding post data.
+
+Per-ID error outcomes could isolate corrupt profiles, but would require a more complex response contract and loader mapping. We accept whole-batch failure for this implementation. Per-ID outcomes are not planned follow-up scope.
+
 ## Why start with explicit delegation?
 
 Our first design keeps one public GraphQL schema in Express. Its author resolver delegates public-profile lookup through DataLoader to an internal HTTP endpoint. The user service does not need to expose GraphQL for this exercise.
@@ -516,3 +525,4 @@ This ticket remains design-only. Review and commit the design before opening the
 5. Test missing profiles, service outages, invalid responses, payload limits, and tracing across processes.
 
 Each checkpoint should be small enough to review and verify independently. Existing authentication and post-authorization tests must continue to pass when implementation begins.
+
