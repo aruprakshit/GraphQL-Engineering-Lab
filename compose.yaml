@@ -50,6 +50,10 @@ services:
       USER_SERVICE_TOKEN: "${USER_SERVICE_TOKEN:?Set USER_SERVICE_TOKEN in .env}"
       MONGO_URL: mongodb://mongo:27017
       MONGO_DB: graphql_engineering_lab
+      OTEL_SERVICE_NAME: graphql-user-service
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
     command: npm run dev
     depends_on:
       mongo:

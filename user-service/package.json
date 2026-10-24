@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "node --import tsx/esm --test --test-concurrency=1 \"src/**/*.test.ts\"",
-    "dev": "node --watch --import tsx/esm src/main.ts",
+    "dev": "node --watch --experimental-loader=@opentelemetry/instrumentation/hook.mjs --import tsx/esm --import ./src/instrumentation.ts src/main.ts",
     "typecheck": "tsc --noEmit",
     "format": "prettier . --write",
     "format:check": "prettier . --check",
@@ -17,6 +17,13 @@
   "type": "module",
   "private": true,
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/instrumentation": "^0.223.0",
+    "@opentelemetry/instrumentation-express": "^0.71.0",
+    "@opentelemetry/instrumentation-http": "^0.223.0",
+    "@opentelemetry/instrumentation-mongodb": "^0.76.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "express": "^5.2.1",
     "mongodb": "^7.7.0",
     "zod": "^4.6.7"

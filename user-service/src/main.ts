@@ -2,6 +2,7 @@ import { MongoClient } from "mongodb";
 import { createApp } from "./app.js";
 import { readConfig, readDatabaseConfig } from "./config.js";
 import { findPublicProfiles } from "./profiles.js";
+import { shutdownTelemetry } from "./instrumentation.js";
 
 const config = readConfig();
 const databaseConfig = readDatabaseConfig();
@@ -52,7 +53,11 @@ async function shutdown(): Promise<void> {
       });
     });
   } finally {
-    await client.close();
+    try {
+      await client.close();
+    } finally {
+      await shutdownTelemetry();
+    }
   }
 }
 
