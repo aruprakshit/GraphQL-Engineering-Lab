@@ -94,7 +94,7 @@ jobs:
 
       - name: Run unit tests
         run: npm test
-    user-service-checks:
+  user-service-checks:
     name: User service formatting and TypeScript
     runs-on: ubuntu-latest
     container:
