@@ -21,6 +21,7 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
+  
   mongo:
     image: mongo:9.0
     volumes:
@@ -36,6 +37,28 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+  
+  user-service:
+    image: node:26-alpine
+    working_dir: /app
+    user: "${LOCAL_UID:?Set LOCAL_UID}:${LOCAL_GID:?Set LOCAL_GID}"
+    volumes:
+      - ./user-service:/app
+      - user-service-dependencies:/app/node_modules
+    environment:
+      npm_config_cache: /tmp/npm-cache
+      USER_SERVICE_TOKEN: "${USER_SERVICE_TOKEN:?Set USER_SERVICE_TOKEN in .env}"
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: graphql_engineering_lab
+      OTEL_SERVICE_NAME: graphql-user-service
+      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: http://jaeger:4318/v1/traces
+      OTEL_METRICS_EXPORTER: none
+      OTEL_LOGS_EXPORTER: none
+    command: npm run dev
+    depends_on:
+      mongo:
+        condition: service_healthy
+  
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0
     ports:
@@ -82,9 +105,29 @@ services:
       test-mongo:
         condition: service_healthy
     command: npm run test:integration
+  
+  user-service-integration-tests:
+    image: node:26-alpine
+    profiles:
+      - test
+    working_dir: /app
+    user: "${LOCAL_UID:?Set LOCAL_UID}:${LOCAL_GID:?Set LOCAL_GID}"
+    environment:
+      npm_config_cache: /tmp/npm-cache
+      TEST_MONGO_URL: mongodb://test-mongo:27017
+    volumes:
+      - ./user-service:/app:ro
+      - user-service-dependencies:/app/node_modules:ro
+    depends_on:
+      test-mongo:
+        condition: service_healthy
+    command: npm run test:integration
 
 volumes:
   mongo-data:
   backend-dependencies:
     external: true
     name: graphql-lab-node-modules
+  user-service-dependencies:
+    external: true
+    name: graphql-lab-user-service-node-modules

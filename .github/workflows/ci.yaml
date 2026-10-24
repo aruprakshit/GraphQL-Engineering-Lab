@@ -1,4 +1,4 @@
-name: Backend CI
+name: Project CI
 
 on:
   pull_request:
@@ -94,3 +94,83 @@ jobs:
 
       - name: Run unit tests
         run: npm test
+  user-service-checks:
+    name: User service formatting and TypeScript
+    runs-on: ubuntu-latest
+    container:
+      image: node:26-bookworm
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: user-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        id: install
+        run: npm ci
+
+      - name: Check formatting
+        run: npm run format:check
+
+      - name: Check TypeScript
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        run: npm run typecheck
+
+  user-service-unit:
+    name: User service unit tests
+    runs-on: ubuntu-latest
+    container:
+      image: node:26-bookworm
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: user-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test
+
+  user-service-integration:
+    name: User service MongoDB integration tests
+    runs-on: ubuntu-latest
+    container:
+      image: node:26-bookworm
+    timeout-minutes: 10
+
+    services:
+      mongo:
+        image: mongo:9.0
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.adminCommand({ ping: 1 }).ok === 1 ? 0 : 1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+          --health-start-period 10s
+
+    env:
+      TEST_MONGO_URL: mongodb://mongo:27017
+
+    defaults:
+      run:
+        working-directory: user-service
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run integration tests
+        run: npm run test:integration
