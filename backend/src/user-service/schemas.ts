@@ -1,0 +1,25 @@
+import * as z from "zod";
+
+export const profileIdSchema = z
+  .string()
+  .refine((value) => value.length >= 1 && value.length <= 256, {
+    message: "ID must contain 1 to 256 UTF-16 code units",
+  });
+
+export const profileIdsSchema = z.array(profileIdSchema);
+
+export const publicProfileSchema = z.strictObject({
+  id: profileIdSchema,
+  displayName: z
+    .string()
+    .refine(
+      (value) => value.length > 0 && Buffer.byteLength(value, "utf8") <= 128,
+      { message: "Display name must be nonempty and at most 128 UTF-8 bytes" },
+    ),
+});
+
+export const batchResponseSchema = z.strictObject({
+  users: z.array(publicProfileSchema).max(100),
+});
+
+export type PublicProfile = z.infer<typeof publicProfileSchema>;
