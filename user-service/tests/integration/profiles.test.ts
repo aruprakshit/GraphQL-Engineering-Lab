@@ -6,6 +6,8 @@ import {
   findPublicProfiles,
   InvalidStoredProfileError,
 } from "../../src/profiles.js";
+import { once } from "node:events";
+import { createApp } from "../../src/app.js";
 
 // Allow invalid fixture values deliberately: the lookup must validate
 // actual stored data rather than trust TypeScript declarations.
@@ -142,4 +144,154 @@ test("public profile lookup", async (t) => {
       InvalidStoredProfileError,
     );
   });
+
+  // Exercise the assembled app with real MongoDB, rather than a stub.
+  await t.test(
+    "application connects HTTP requests to profile storage",
+    async (t) => {
+      const token = "ab".repeat(32);
+      let lookupCalls = 0;
+
+      const app = createApp({
+        serviceToken: token,
+        lookupProfiles: (input) => {
+          lookupCalls += 1;
+          return findPublicProfiles(database, input);
+        },
+      });
+
+      const server = app.listen(0, "127.0.0.1");
+
+      t.after(async () => {
+        server.closeAllConnections();
+
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+
+            resolve();
+          });
+        });
+      });
+
+      await once(server, "listening");
+
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+
+      const baseUrl = `http://127.0.0.1:${address.port}`;
+
+      interface TestHttpResponse {
+        status: number;
+        body: unknown;
+      }
+
+      async function send(
+        ids: string[],
+        authenticated = true,
+      ): Promise<TestHttpResponse> {
+        const headers = new Headers({
+          "Content-Type": "application/json",
+        });
+
+        if (authenticated) {
+          headers.set("Authorization", `Bearer ${token}`);
+        }
+
+        const response = await fetch(`${baseUrl}/internal/users/batch`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ ids }),
+        });
+
+        return {
+          status: response.status,
+          body: await response.json(),
+        };
+      }
+
+      await t.test("health does not perform a profile lookup", async () => {
+        const before = lookupCalls;
+        const response = await fetch(`${baseUrl}/health`);
+
+        assert.equal(response.status, 200);
+        assert.deepEqual(await response.json(), {
+          status: "ok",
+          service: "graphql-user-service",
+        });
+        assert.equal(lookupCalls, before);
+      });
+
+      await t.test(
+        "returns stored profiles through the batch endpoint",
+        async () => {
+          await seed([
+            {
+              _id: "http-user",
+              name: "Ada",
+              privateNote: "Must not leave storage",
+            },
+          ]);
+
+          const before = lookupCalls;
+          const response = await send([
+            "http-user",
+            "missing-user",
+            "http-user",
+          ]);
+
+          assert.equal(response.status, 200);
+          assert.deepEqual(response.body, {
+            users: [{ id: "http-user", displayName: "Ada" }],
+          });
+          assert.equal(lookupCalls, before + 1);
+        },
+      );
+
+      await t.test("rejects unauthorized requests before lookup", async () => {
+        const before = lookupCalls;
+        const response = await send(["http-user"], false);
+
+        assert.equal(response.status, 401);
+        assert.deepEqual(response.body, {
+          error: {
+            code: "UNAUTHORIZED",
+            message: "Service authentication required",
+          },
+        });
+        assert.equal(lookupCalls, before);
+      });
+
+      await t.test("rejects invalid input before lookup", async () => {
+        const before = lookupCalls;
+        const response = await send([]);
+
+        assert.equal(response.status, 400);
+        assert.equal(lookupCalls, before);
+      });
+
+      await t.test(
+        "returns a generic failure for corrupt stored data",
+        async () => {
+          await seed([
+            { _id: "valid-user", name: "Ada" },
+            { _id: "invalid-user", name: 123 },
+          ]);
+
+          const response = await send(["valid-user", "invalid-user"]);
+
+          assert.equal(response.status, 500);
+          assert.deepEqual(response.body, {
+            error: {
+              code: "INTERNAL_SERVER_ERROR",
+              message: "Unable to complete profile lookup",
+            },
+          });
+        },
+      );
+    },
+  );
 });

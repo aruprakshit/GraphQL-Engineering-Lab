@@ -48,7 +48,12 @@ services:
     environment:
       npm_config_cache: /tmp/npm-cache
       USER_SERVICE_TOKEN: "${USER_SERVICE_TOKEN:?Set USER_SERVICE_TOKEN in .env}"
+      MONGO_URL: mongodb://mongo:27017
+      MONGO_DB: graphql_engineering_lab
     command: npm run dev
+    depends_on:
+      mongo:
+        condition: service_healthy
   
   jaeger:
     image: cr.jaegertracing.io/jaegertracing/jaeger:2.22.0

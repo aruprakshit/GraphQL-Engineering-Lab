@@ -67,14 +67,17 @@ test("batch route handles lookup outcomes", async (t) => {
     };
   }
 
-  await t.test("returns an empty successful result for missing users", async () => {
-    lookup = async () => [];
+  await t.test(
+    "returns an empty successful result for missing users",
+    async () => {
+      lookup = async () => [];
 
-    const response = await send();
+      const response = await send();
 
-    assert.equal(response.status, 200);
-    assert.deepEqual(response.body, { users: [] });
-  });
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body, { users: [] });
+    },
+  );
 
   await t.test("returns a generic 503 for database failure", async () => {
     lookup = async () => {
