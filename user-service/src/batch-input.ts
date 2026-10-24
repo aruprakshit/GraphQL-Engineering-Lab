@@ -3,11 +3,9 @@ import * as z from "zod";
 const batchInputSchema = z.strictObject({
   ids: z
     .array(
-      z
-        .string()
-        .refine((value) => value.length >= 1 && value.length <= 256, {
-          message: "ID must contain 1 to 256 UTF-16 code units",
-        }),
+      z.string().refine((value) => value.length >= 1 && value.length <= 256, {
+        message: "ID must contain 1 to 256 UTF-16 code units",
+      }),
     )
     .min(1)
     .max(100),
