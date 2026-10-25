@@ -1,57 +1,82 @@
 import assert from "node:assert/strict";
-import { connectDatabase, database, mongoClient } from "./database.js";
-import { createUserLoader } from "./loaders.js";
+import { createUserServiceClient } from "./user-service/client.js";
+import { parseUserServiceOptions } from "./user-service/config.js";
+import { UserServiceUnavailableError } from "./user-service/errors.js";
+import { createProfileLoader } from "./user-service/loader.js";
+import type { UserServiceClient } from "./user-service/types.js";
 
 async function checkLoader(): Promise<void> {
-  try {
-    await connectDatabase();
+  const options = parseUserServiceOptions({
+    baseUrl: process.env.USER_SERVICE_URL,
+    serviceToken: process.env.USER_SERVICE_TOKEN,
+  });
 
-    // 1. ARRANGE: CREATE A LOADER AND CAPTURE DATABASE CALLS
-    const calls: string[] = [];
+  const httpClient = createUserServiceClient(options);
+  const calls: string[][] = [];
 
-    const loader = createUserLoader(
-      database,
-      (operation) => {
-        calls.push(operation);
-        console.log(operation);
-      },
-      "loader-check",
-    );
+  // Observe loader-to-client calls while retaining real HTTP behavior.
+  const observedClient: UserServiceClient = {
+    async findProfiles(ids) {
+      calls.push([...ids]);
+      return httpClient.findProfiles(ids);
+    },
+  };
 
-    // 2. ACT: REQUEST REORDERED, MISSING, AND REPEATED IDS
-    const results = await loader.loadMany([
-      "user-3",
-      "missing-user",
-      "user-1",
-      "user-3",
-    ]);
+  // Arrange
+  const loader = createProfileLoader(observedClient, "loader-check");
 
-    // 3. ASSERT: RESULTS FOLLOW INPUT ORDER
-    assert.deepEqual(
-      results.map((user) => {
-        if (user instanceof Error) {
-          throw user;
-        }
+  // Act
+  const results = await loader.loadMany([
+    "user-3",
+    "missing-user",
+    "user-1",
+    "user-3",
+  ]);
 
-        return user?.name ?? null;
-      }),
-      ["Linus", null, "Ada", "Linus"],
-    );
+  // Assert
+  assert.deepEqual(
+    results.map((profile) => {
+      if (profile instanceof Error) {
+        throw profile;
+      }
 
-    assert.equal(calls.length, 1);
+      return profile?.displayName ?? null;
+    }),
+    ["Linus", null, "Ada", "Linus"],
+  );
+  assert.deepEqual(calls, [["user-3", "missing-user", "user-1"]]);
 
-    // 4. ASSERT: A SUBSEQUENT LOAD USES THIS LOADER'S CACHE
-    await loader.load("user-3");
+  // Why: another lookup in this request must use its cached profile.
+  // Act
+  await loader.load("user-3");
 
-    assert.equal(calls.length, 1);
+  // Assert
+  assert.equal(calls.length, 1);
 
-    console.log("Loader ordering, missing-user, and cache checks passed");
-  } finally {
-    await mongoClient.close();
-  }
+  // Why: a separate request must not reuse the first request's cache.
+  // Arrange
+  const nextLoader = createProfileLoader(observedClient, "next-request-check");
+
+  // Act
+  const fresh = await nextLoader.load("user-3");
+
+  // Assert
+  assert.equal(fresh?.displayName, "Linus");
+  assert.deepEqual(calls, [["user-3", "missing-user", "user-1"], ["user-3"]]);
+
+  console.log(
+    "Service-backed loader ordering, missing-profile, cache, and request-isolation checks passed",
+  );
 }
 
 checkLoader().catch((error: unknown) => {
-  console.error("Loader checks failed:", error);
+  console.error({
+    event: "loader_check_failed",
+    reason:
+      error instanceof UserServiceUnavailableError
+        ? error.reason
+        : "CHECK_FAILED",
+  });
+
   process.exitCode = 1;
 });
