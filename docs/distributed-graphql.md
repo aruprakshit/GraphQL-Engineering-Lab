@@ -6,7 +6,7 @@ Explore how our Express GraphQL API retrieves data across service boundaries whi
 
 We will begin with explicit service calls. Federation remains a design comparison for a later checkpoint.
 
-The internal user service is implemented in issue #63. The GraphQL author loader still reads MongoDB directly; the bounded outgoing HTTP client and GraphQL delegation remain planned. This document includes both the implemented endpoint contract and the future delegation design.
+The internal user service is implemented in issue #63, and the bounded backend HTTP client is implemented in issue #65. The GraphQL author loader still reads MongoDB directly; connecting it to the client remains planned. This document distinguishes the implemented service and client from the future GraphQL delegation design.
 
 ## Proposed ownership
 
@@ -311,7 +311,7 @@ For `Query.post: Post`, the nullable root post field would stop propagation and 
 | One batch fails for several posts | Error paths identify affected authors; no request per post |
 | Query does not select author | No user-service lookup |
 
-These are delegation acceptance scenarios. The endpoint and MongoDB lookup already have tests described below; outgoing deadline handling, loader delegation, and GraphQL partial-failure behavior still require implementation and verification.
+These are delegation acceptance scenarios. The endpoint and MongoDB lookup already have tests described below; the outgoing client now has deadline and response-handling tests, while loader delegation and GraphQL partial-failure behavior still require implementation and verification.
 
 ## Trace propagation
 
@@ -428,7 +428,7 @@ Local container-to-container HTTP is the learning setup. A deployment across unt
 | Jaeger unavailable | API behavior remains independent of trace export |
 | Inspect Compose configuration | No user-service host port published; secrets are not committed |
 
-The internal endpoint has authentication and lookup tests. Cross-service trace continuity and GraphQL error mapping remain planned until the backend delegates author lookups. Configuration alone does not establish that the operational tracing checks have passed.
+The internal endpoint has authentication and lookup tests. The client verification script can now exercise cross-service trace continuity without GraphQL. GraphQL error mapping and trace continuity through author resolvers remain planned until loader delegation. Configuration alone does not establish that the operational tracing checks have passed.
 
 ## Profile bounds and payload budgets
 
@@ -578,12 +578,115 @@ docker compose --profile test run --rm user-service-integration-tests
 
 The workflow defines separate user-service jobs for formatting and TypeScript, unit tests, and MongoDB integration tests. They install from the user service's own lockfile. Tests provide their own credentials and import the application without starting main.ts or preloading telemetry, so these jobs need neither the real service token nor Jaeger. Confirm the workflow is valid and all jobs pass before merging; documenting the jobs is not evidence of a successful CI run.
 
-For manual tracing verification, issue an authenticated batch request and search Jaeger for `graphql-user-service`. Expect an incoming HTTP span and its MongoDB lookup. A single trace spanning the backend and user service is not enabled by this ticket.
+For manual tracing verification, issue an authenticated batch request and search Jaeger for `graphql-user-service`. Expect an incoming HTTP span and its MongoDB lookup. Issue #63 enabled user-service tracing; issue #65 adds the client and standalone cross-service verification described below.
+
+## Implemented backend HTTP client: issue #65
+
+The client lives in `backend/src/user-service/`. It is independently usable through `createUserServiceClient(options).findProfiles(ids)` and is not yet connected to the GraphQL loader.
+
+| File | Responsibility |
+| --- | --- |
+| types.ts and errors.ts | Client contract and generic errors with internal failure reasons |
+| schemas.ts | Zod schemas for IDs and public-profile responses |
+| config.ts | Validate and normalize an HTTP(S) origin and service token |
+| batches.ts | Validate all input, deduplicate, and split by count and serialized JSON bytes |
+| read-response.ts | Incrementally enforce the response byte limit, decode UTF-8, and parse JSON |
+| validate-response.ts | Validate profiles and reject duplicate or unrequested response IDs |
+| client.ts | Send authenticated POST requests with deadlines and response checks |
+| tracing.ts | Create client spans and propagate only traceparent and tracestate |
+
+### Client behavior
+
+```mermaid
+flowchart TD
+    Input[Lookup IDs] --> Validate[Validate all IDs and deduplicate]
+    Validate --> Batches[Split into bounded requests]
+    Batches --> Span[Start one client span per batch]
+    Span --> Deadline[Start 500 ms deadline]
+    Deadline --> HTTP[Authenticated POST with trace context]
+    HTTP --> Status[Require HTTP 200 and application/json]
+    Status --> Read[Read at most 256 KiB and parse JSON]
+    Read --> Contract[Validate profiles and response IDs]
+    Contract --> Finish[Clean up and collect results]
+```
+
+- Invalid input fails before any network request. Empty input returns an empty array locally.
+- Each request contains at most 100 IDs and at most 32 KiB of serialized JSON. The client sends the same serialized body whose size was measured.
+- Batches run sequentially. Each gets its own 500 ms deadline; the entire multi-batch call does not have a single 500 ms deadline or an aggregate result-size bound.
+- The deadline remains active while reading the body. It cannot preempt synchronous parsing or validation; elapsed time is checked before accepting the result.
+- The response limit is enforced on actual stream bytes rather than trusting Content-Length. Invalid UTF-8 and invalid JSON are rejected.
+- Profiles may arrive in any order or be omitted. Returned IDs must be unique and belong to that specific request batch.
+- The client does not follow redirects and has no application retry loop.
+- A failure in any batch rejects the overall lookup, rather than exposing previously accumulated profiles as a partial success.
+
+Configuration accepts an origin such as `http://user-service:4001`, not an endpoint path, URL credentials, query parameters, or a fragment. The client constructs `/internal/users/batch` itself. A configured origin is trusted deployment input; URL-shape validation is not a host allowlist or complete SSRF protection.
+
+### Failure contract
+
+| Situation | Error |
+| --- | --- |
+| Invalid configuration | InvalidUserServiceConfigError |
+| Invalid lookup IDs | InvalidUserServiceInputError |
+| Deadline exceeded | UserServiceUnavailableError with TIMEOUT |
+| Fetch or response-stream transport failure | UserServiceUnavailableError with NETWORK_ERROR |
+| Non-200 response, including redirects | UserServiceUnavailableError with HTTP_ERROR |
+| Wrong media type, invalid encoding/JSON/schema, duplicate or unrequested IDs | UserServiceUnavailableError with INVALID_RESPONSE |
+| Response body exceeds the byte budget | UserServiceUnavailableError with RESPONSE_TOO_LARGE |
+
+Dependency errors expose the generic message `User service temporarily unavailable`. Internal reasons support tests and tracing. A valid response omitting an ID remains a successful missing-profile outcome.
+
+### Trace propagation and test coverage
+
+Every outgoing batch gets a `user-service.batch` CLIENT span. Its trace context is injected before fetch sends the request. Only traceparent and tracestate are copied from the propagation carrier; baggage and browser credentials are not forwarded. The separately configured service token supplies the Authorization header.
+
+Span attributes record counts, configured timeout, HTTP status when available, and success or a classified failure. They do not record token values, profile ID lists, full bodies, or arbitrary exception details. Client spans end on both success and failure. The current implementation uses manual fetch instrumentation; review span duplication if automatic fetch instrumentation is introduced later.
+
+Tests cover configuration, batching, stream limits and cleanup, response-ID validation, actual local HTTP requests, redirects, failed responses, delayed headers, delayed bodies, and dropped connections. In-memory telemetry tests check parent-child context, finished spans, baggage exclusion, secret-safe attributes, and headers received by an actual HTTP server.
+
+The new tests use inline Why and Arrange / Act / Assert sections. For stepping through an individual test in Docker, see [the debugging guide](debugging-tests.md).
+
+### Real Docker verification
+
+The backend Compose service receives `USER_SERVICE_URL=http://user-service:4001` and the dedicated token from the ignored local `.env` file. The standalone `backend/src/check-user-service.ts` script reads those settings, calls the real client, prints public profiles and a trace ID, and flushes telemetry before exiting. It does not start Express or replace the GraphQL loader.
+
+```sh
+docker compose up -d mongo jaeger user-service
+docker compose up -d --force-recreate backend
+
+docker compose exec backend node \
+  --experimental-loader=@opentelemetry/instrumentation/hook.mjs \
+  --import tsx/esm \
+  --import ./src/instrumentation.ts \
+  src/check-user-service.ts
+```
+
+With the existing seed data, expect Ada and Linus once each, with the missing profile omitted. Look up the printed trace ID in Jaeger. Expected structure:
+
+```text
+graphql-engineering-lab: user-service.client.check
+  graphql-engineering-lab: user-service.batch
+    graphql-user-service: incoming batch HTTP request
+      MongoDB profile lookup
+```
+
+Use this to verify the real deployment path and remote context extraction. Automated local-server tests do not by themselves prove that both Docker services appear in Jaeger. This document records the verification procedure, not an assertion that the latest run or CI has passed.
+
+### Final checks
+
+The backend's existing CI scripts discover the new tests. No separate Jaeger instance or real service credential is required by these automated tests.
+
+```sh
+docker compose exec backend npm run format:check
+docker compose exec backend npm run typecheck
+docker compose exec backend npm test
+docker compose exec backend npm run schema:check
+docker compose --profile test run --rm integration-tests
+```
 
 ## Remaining delegation checkpoints
 
-1. Implement the backend's bounded HTTP client with response validation, a deadline, request-size-aware batching, and propagated trace context.
-2. Adapt the request-scoped author loader and shared public-user mapper while preserving the public schema.
-3. Verify missing profiles, outages, invalid responses, payload limits, GraphQL partial responses, and one trace across both services.
+1. Adapt the request-scoped author loader to the HTTP client and restore results to DataLoader key order, including null for omitted profiles.
+2. Update the shared public-user mapper while preserving both name and displayName and the existing public schema.
+3. Verify GraphQL author selection, request caching, partial responses on missing profiles or outages, authorization behavior, and traces across both services.
 
-Existing authentication and post-authorization behavior stays in the backend. Per-ID error outcomes and federation implementation are outside the current scope.
+Authentication and post authorization stay in the backend. Per-ID error outcomes and federation implementation are outside the current scope.

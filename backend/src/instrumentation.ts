@@ -24,7 +24,7 @@ sdk.start();
 console.log("OpenTelemetry initialized");
 
 // 4. FLUSH TELEMETRY WHEN THIS PROCESS IS STOPPED
-async function shutdownTelemetry(): Promise<void> {
+export async function shutdownTelemetry(): Promise<void> {
   try {
     await sdk.shutdown();
   } catch (error: unknown) {
