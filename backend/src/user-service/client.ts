@@ -10,6 +10,11 @@ import type {
   UserServiceClientOptions,
 } from "./types.js";
 import { validateProfileResponse } from "./validate-response.js";
+import type { Span } from "@opentelemetry/api";
+import {
+  createServiceRequestHeaders,
+  withUserServiceBatchSpan,
+} from "./tracing.js";
 
 export const USER_SERVICE_TIMEOUT_MS = 500;
 
@@ -21,6 +26,7 @@ export function createUserServiceClient(
 
   async function requestBatch(
     batch: ProfileRequestBatch,
+    span: Span,
   ): Promise<PublicProfile[]> {
     const controller = new AbortController();
     const deadline = performance.now() + USER_SERVICE_TIMEOUT_MS;
@@ -34,17 +40,14 @@ export function createUserServiceClient(
     try {
       const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${config.serviceToken}`,
-        },
+        headers: createServiceRequestHeaders(config.serviceToken),
         body: batch.body,
         signal: controller.signal,
 
         // Do not follow redirects to another endpoint.
         redirect: "manual",
       });
+      span.setAttribute("http.response.status_code", response.status);
 
       if (response.status !== 200) {
         throw new UserServiceUnavailableError("HTTP_ERROR");
@@ -97,7 +100,13 @@ export function createUserServiceClient(
       // Process batches sequentially rather than starting an unbounded
       // number of concurrent requests. Each batch gets its own deadline.
       for (const batch of batches) {
-        profiles.push(...(await requestBatch(batch)));
+        const batchProfiles = await withUserServiceBatchSpan(
+          batch.ids.length,
+          USER_SERVICE_TIMEOUT_MS,
+          (span) => requestBatch(batch, span),
+        );
+
+        profiles.push(...batchProfiles);
       }
 
       return profiles;
