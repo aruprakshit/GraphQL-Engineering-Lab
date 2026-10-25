@@ -222,7 +222,20 @@ Leave the checkout available until any setup corrections have been incorporated 
 
 ## Verification record
 
-Status: procedure prepared; isolated setup has not yet been reported as verified.
+Status: the developer reported that the isolated setup and all requested verification steps passed during issue #71. This records the developer's manual verification; it is not a claim that the documentation editor executed the Docker commands.
 
-Record the tested commit, Compose version, and outcomes for clean installation, empty storage, repeatable seeding/indexes, browser walkthrough, distributed trace, outage recovery, and automated checks. Record failures and fixes explicitly. Do not include secrets or raw resolved Compose environment output.
+| Check | Reported outcome |
+| --- | --- |
+| Separate checkout and isolated Docker resources | Verified |
+| Fresh locked dependency installation for both applications | Verified |
+| Empty initial storage, seed fixtures, and repeatable seeding/indexes | Verified |
+| Sandbox Playground and documented pagination | Verified |
+| Account provisioning, login, me, draft creation/editing/publication, and logout | Verified |
+| GraphQL trace containing both services | Verified |
+| Profile-service outage behavior and subsequent recovery | Verified |
+| Backend and user-service automated checks, including integration tests | Verified |
+| Documented load-test command and response checks | Verified |
 
+No blocking setup issue was reported. The exact tested checkout commit and Docker Compose version were not supplied with the completion report, so this record does not assert those values. Capture them when repeating the procedure for release-specific reproducibility.
+
+Keep future verification records free of passwords, cookies, service tokens, and raw resolved Compose environment output.
