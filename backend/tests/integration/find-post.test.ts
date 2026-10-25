@@ -43,6 +43,9 @@ import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createTestProfileLoader } from "../helpers/profile-loader.js";
+import { createProfileLoader } from "../../src/user-service/loader.js";
+import type { UserServiceClient } from "../../src/user-service/types.js";
+import { UserServiceUnavailableError } from "../../src/user-service/errors.js";
 
 // Purpose: Check single-record authorization at the service and GraphQL boundaries.
 test("single-post visibility service", async (t) => {
@@ -255,6 +258,7 @@ test("single-post visibility service", async (t) => {
         database?: GraphQLContext["database"];
         authenticationDatabase?: GraphQLContext["database"];
         source?: string;
+        profileClient?: UserServiceClient;
       }
 
       async function executePost(
@@ -280,10 +284,9 @@ test("single-post visibility service", async (t) => {
           requestId: randomUUID(),
           database: requestDatabase,
           logDatabaseCall: () => {},
-          userLoader: createTestProfileLoader(
-            requestDatabase,
-            "find-post-test",
-          ),
+          userLoader: options.profileClient
+            ? createProfileLoader(options.profileClient, "find-post-test")
+            : createTestProfileLoader(requestDatabase, "find-post-test"),
           sessionToken: token,
           getActor: createRequestActor(() =>
             resolveSession(authenticationDatabase, token),
@@ -303,6 +306,206 @@ test("single-post visibility service", async (t) => {
           contextValue: context,
         });
       }
+
+      await t.test(
+        "maps service profiles to both public name fields",
+        async () => {
+          // Why: author fields must use the service response, not accidentally
+          // read the old MongoDB profile or drop the deprecated name field.
+
+          // Arrange
+          const calls: string[][] = [];
+          const profileClient: UserServiceClient = {
+            async findProfiles(ids) {
+              calls.push([...ids]);
+              return [{ id: "ada", displayName: "Ada From Service" }];
+            },
+          };
+          const source = /* GraphQL */ `
+            query ServiceAuthor($id: ID!) {
+              post(id: $id) {
+                id
+                author {
+                  id
+                  name
+                  displayName
+                }
+              }
+            }
+          `;
+
+          // Act
+          const result = await executePost(null, "ada-published", {
+            source,
+            profileClient,
+          });
+
+          // Assert
+          assert.equal(result.errors, undefined);
+          assert.equal(
+            JSON.stringify(result.data),
+            JSON.stringify({
+              post: {
+                id: "ada-published",
+                author: {
+                  id: "ada",
+                  name: "Ada From Service",
+                  displayName: "Ada From Service",
+                },
+              },
+            }),
+          );
+          assert.deepEqual(calls, [["ada"]]);
+        },
+      );
+
+      await t.test(
+        "returns a missing author without a GraphQL error",
+        async () => {
+          // Why: an omitted profile means missing data, not a service failure.
+          // Nullable author must preserve the surrounding post.
+
+          // Arrange
+          let calls = 0;
+          const profileClient: UserServiceClient = {
+            async findProfiles() {
+              calls += 1;
+              return [];
+            },
+          };
+          const source = /* GraphQL */ `
+            query MissingAuthor($id: ID!) {
+              post(id: $id) {
+                id
+                title
+                author {
+                  id
+                }
+              }
+            }
+          `;
+
+          // Act
+          const result = await executePost(null, "ada-published", {
+            source,
+            profileClient,
+          });
+
+          // Assert
+          assert.equal(result.errors, undefined);
+          assert.equal(
+            JSON.stringify(result.data),
+            JSON.stringify({
+              post: {
+                id: "ada-published",
+                title: "Ada published",
+                author: null,
+              },
+            }),
+          );
+          assert.equal(calls, 1);
+        },
+      );
+
+      await t.test(
+        "preserves post data when the author dependency fails",
+        async () => {
+          // Why: an outage must produce an error rather than masquerade as a
+          // missing user. Nullable author keeps post and unrelated data available.
+
+          // Arrange
+          const profileClient: UserServiceClient = {
+            async findProfiles() {
+              throw new UserServiceUnavailableError("TIMEOUT");
+            },
+          };
+          const source = /* GraphQL */ `
+            query UnavailableAuthor($id: ID!) {
+              hello
+              post(id: $id) {
+                id
+                title
+                author {
+                  id
+                }
+              }
+            }
+          `;
+
+          // Act
+          const result = await executePost(null, "ada-published", {
+            source,
+            profileClient,
+          });
+
+          // Assert
+          assert.equal(result.errors?.length, 1);
+          assert.equal(
+            result.errors?.[0]?.message,
+            "Author information temporarily unavailable",
+          );
+          assert.equal(
+            result.errors?.[0]?.extensions.code,
+            "SERVICE_UNAVAILABLE",
+          );
+          assert.deepEqual(result.errors?.[0]?.path, ["post", "author"]);
+          assert.equal(
+            JSON.stringify(result.data),
+            JSON.stringify({
+              hello: "Hello from GraphQL Engineering Lab",
+              post: {
+                id: "ada-published",
+                title: "Ada published",
+                author: null,
+              },
+            }),
+          );
+        },
+      );
+
+      await t.test(
+        "does not fetch profiles when author is not selected",
+        async () => {
+          // Why: creating the request loader must not eagerly call the service.
+          // Queries needing only post fields should work during a profile outage.
+
+          // Arrange
+          let calls = 0;
+          const profileClient: UserServiceClient = {
+            async findProfiles() {
+              calls += 1;
+              throw new UserServiceUnavailableError("NETWORK_ERROR");
+            },
+          };
+          const source = /* GraphQL */ `
+            query PostWithoutAuthor($id: ID!) {
+              post(id: $id) {
+                id
+                title
+              }
+            }
+          `;
+
+          // Act
+          const result = await executePost(null, "ada-published", {
+            source,
+            profileClient,
+          });
+
+          // Assert
+          assert.equal(result.errors, undefined);
+          assert.equal(
+            JSON.stringify(result.data),
+            JSON.stringify({
+              post: {
+                id: "ada-published",
+                title: "Ada published",
+              },
+            }),
+          );
+          assert.equal(calls, 0);
+        },
+      );
 
       /**
        * Old clients keep using name. New clients use displayName.
