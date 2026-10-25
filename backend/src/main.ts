@@ -1,7 +1,6 @@
 import express from "express";
 import { connectDatabase, database } from "./database.js";
 import { createHandler } from "graphql-http/lib/use/express";
-import { createUserLoader } from "./loaders.js";
 import { schema } from "./graphql.js";
 import { rootValue } from "./resolvers/index.js";
 import { ruruHTML } from "ruru/server";
@@ -17,11 +16,21 @@ import { readSessionCookie } from "./auth/session-cookie.js";
 import { resolveSession } from "./auth/sessions.js";
 import { createRequestActor } from "./auth/request-actor.js";
 import { executeWithQueryBudget } from "./execute-with-query-budget.js";
+import { createProfileLoader } from "./user-service/loader.js";
+import { createUserServiceClient } from "./user-service/client.js";
+import { parseUserServiceOptions } from "./user-service/config.js";
 
 interface LearningCheck {
   _id: string;
   message: string;
 }
+
+const userServiceClient = createUserServiceClient(
+  parseUserServiceOptions({
+    baseUrl: process.env.USER_SERVICE_URL,
+    serviceToken: process.env.USER_SERVICE_TOKEN,
+  }),
+);
 
 // 1. CREATE THE APPLICATION
 const app = express();
@@ -126,7 +135,7 @@ app.all("/graphql", (req, res, next) => {
         requestId,
         database,
         logDatabaseCall,
-        userLoader: createUserLoader(database, logDatabaseCall, requestId),
+        userLoader: createProfileLoader(userServiceClient, requestId),
         verifyCredentials,
         rateLimiter: loginRateLimiter,
         beginLogin,

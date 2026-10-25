@@ -49,7 +49,7 @@ import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 
 // Purpose: Start with service rules, then exercise the same rules through GraphQL and sessions.
 test("draft creation service", async (t) => {
@@ -289,9 +289,8 @@ test("draft creation service", async (t) => {
           requestId: randomUUID(),
           database: requestDatabase,
           logDatabaseCall: () => {},
-          userLoader: createUserLoader(
+          userLoader: createTestProfileLoader(
             requestDatabase,
-            () => {},
             "create-draft-test",
           ),
           sessionToken: token,

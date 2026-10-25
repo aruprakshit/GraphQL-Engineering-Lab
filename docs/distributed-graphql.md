@@ -4,11 +4,11 @@
 
 Explore how our Express GraphQL API retrieves data across service boundaries while preserving batching, authorization, and useful partial responses.
 
-We will begin with explicit service calls. Federation remains a design comparison for a later checkpoint.
+The implementation uses explicit service calls. Federation remains a documented design comparison, not part of the current implementation.
 
-The internal user service is implemented in issue #63, and the bounded backend HTTP client is implemented in issue #65. The GraphQL author loader still reads MongoDB directly; connecting it to the client remains planned. This document distinguishes the implemented service and client from the future GraphQL delegation design.
+The internal user service was added in issue #63, the bounded backend HTTP client in issue #65, and GraphQL author delegation in issue #67. Post author lookups now cross the HTTP boundary through a request-scoped DataLoader. Authentication and post authorization retain their existing backend database access.
 
-## Proposed ownership
+## Service responsibilities and transitional ownership
 
 | Component | Owns |
 | --- | --- |
@@ -17,13 +17,13 @@ The internal user service is implemented in issue #63, and the bounded backend H
 | Authentication inside the application | Credentials, sessions, and trusted request identity |
 | Separate user service | Public user profiles and batch profile lookup |
 
-The user service will initially expose public profile fields only. Credentials, sessions, and roles remain with authentication.
+The user service exposes public profile fields only. Credentials, sessions, and roles remain with authentication.
 
 A public profile lookup must not become a way to retrieve password hashes or grant permissions.
 
-## Current flow
+## Original single-application flow
 
-GraphQL requests still access their data within the existing application. The separate user service can now handle direct internal batch requests, but GraphQL does not call it yet.
+Before issue #67, GraphQL author lookups read MongoDB directly inside the backend. This diagram records the original flow for comparison.
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,7 @@ flowchart LR
     Loader --> Mongo
 ```
 
-## Proposed flow
+## Current delegated flow
 
 Post access stays local. Author profile lookup crosses a network boundary.
 
@@ -50,7 +50,7 @@ flowchart LR
 
 These are logical storage ownership boundaries. Separate services do not require separate MongoDB servers for this learning project.
 
-The GraphQL application will stop reading public user profiles directly once delegation is implemented.
+GraphQL post-author resolution now uses the user service. Existing authentication and provisioning code still reads users directly under the transitional storage arrangement described below.
 
 ## Why batching still matters
 
@@ -311,7 +311,7 @@ For `Query.post: Post`, the nullable root post field would stop propagation and 
 | One batch fails for several posts | Error paths identify affected authors; no request per post |
 | Query does not select author | No user-service lookup |
 
-These are delegation acceptance scenarios. The endpoint and MongoDB lookup already have tests described below; the outgoing client now has deadline and response-handling tests, while loader delegation and GraphQL partial-failure behavior still require implementation and verification.
+These delegation acceptance scenarios are covered across loader, client, and GraphQL tests, with real Docker outage and recovery checks recorded for issue #67 below.
 
 ## Trace propagation
 
@@ -343,7 +343,7 @@ sequenceDiagram
     Note over J: One trace across two service names
 ```
 
-Planned span hierarchy:
+Conceptual distributed span hierarchy:
 
 ```text
 POST /graphql                            GraphQL application
@@ -360,7 +360,7 @@ This is a conceptual hierarchy; automatic instrumentation may introduce addition
 
 The outgoing request propagates W3C `traceparent` and, when present, `tracestate`. The user service extracts the context before handling the request. Use OpenTelemetry propagation APIs or verified automatic instrumentation rather than constructing these headers manually. Do not forward arbitrary inbound headers or baggage to the dependency.
 
-The current application configures HTTP, Express, and MongoDB instrumentation. That alone is not evidence that a future HTTP client is instrumented. Choose the client during implementation, verify propagation with that client, and avoid creating duplicate client spans through both manual and automatic instrumentation.
+Both applications configure HTTP, Express, and MongoDB instrumentation. The fetch client adds a manual CLIENT span and explicit trace-context injection; HTTP instrumentation alone was not assumed to instrument fetch. Automated tests verify headers on real local HTTP requests. Review duplicate spans if fetch-specific automatic instrumentation is introduced later.
 
 Initialize telemetry before loading instrumented application libraries in each process, following the existing [local tracing setup](tracing.md).
 
@@ -428,7 +428,7 @@ Local container-to-container HTTP is the learning setup. A deployment across unt
 | Jaeger unavailable | API behavior remains independent of trace export |
 | Inspect Compose configuration | No user-service host port published; secrets are not committed |
 
-The internal endpoint has authentication and lookup tests. The client verification script can now exercise cross-service trace continuity without GraphQL. GraphQL error mapping and trace continuity through author resolvers remain planned until loader delegation. Configuration alone does not establish that the operational tracing checks have passed.
+The endpoint, client, and GraphQL delegation have automated coverage. The real GraphQL trace, user-service outage behavior, and recovery were manually verified during issue #67, as recorded below. Passing local checks does not establish the status of a later CI run.
 
 ## Profile bounds and payload budgets
 
@@ -505,7 +505,7 @@ Our decision is to learn the network boundary explicitly first: batching, deadli
 
 ## Design walkthrough
 
-| Scenario | Planned behavior |
+| Scenario | Expected behavior |
 | --- | --- |
 | Successful posts query | Local visibility filtering, then bounded profile batches; results mapped by ID |
 | Five posts share three authors | Three unique IDs in one batch when calls share a batching window and fit both limits |
@@ -582,7 +582,7 @@ For manual tracing verification, issue an authenticated batch request and search
 
 ## Implemented backend HTTP client: issue #65
 
-The client lives in `backend/src/user-service/`. It is independently usable through `createUserServiceClient(options).findProfiles(ids)` and is not yet connected to the GraphQL loader.
+The client lives in `backend/src/user-service/`. It is independently usable through `createUserServiceClient(options).findProfiles(ids)` and is now used by the GraphQL author loader added in issue #67.
 
 | File | Responsibility |
 | --- | --- |
@@ -683,10 +683,83 @@ docker compose exec backend npm run schema:check
 docker compose --profile test run --rm integration-tests
 ```
 
-## Remaining delegation checkpoints
+## Implemented GraphQL delegation: issue #67
 
-1. Adapt the request-scoped author loader to the HTTP client and restore results to DataLoader key order, including null for omitted profiles.
-2. Update the shared public-user mapper while preserving both name and displayName and the existing public schema.
-3. Verify GraphQL author selection, request caching, partial responses on missing profiles or outages, authorization behavior, and traces across both services.
+The backend creates one reusable HTTP client at startup and a new `createProfileLoader` instance in each GraphQL request context. The client has no profile cache; each DataLoader owns only its request's cache.
 
-Authentication and post authorization stay in the backend. Per-ID error outcomes and federation implementation are outside the current scope.
+```mermaid
+sequenceDiagram
+    participant C as GraphQL client
+    participant G as GraphQL backend
+    participant P as Local post service
+    participant L as Request-scoped profile loader
+    participant U as User service
+
+    C->>G: Query posts with authors
+    G->>P: Read posts visible to actor
+    P-->>G: Visible posts and author IDs
+    G->>L: Load selected author fields
+    L->>U: Bounded HTTP profile batch
+    U-->>L: Existing public profiles
+    L->>L: Map by ID and restore key order
+    L-->>G: Profile or null per key
+    G-->>C: Posts, authors, and any field errors
+```
+
+### Mapping and failure behavior
+
+- The loader maps the unordered service result by profile ID, then returns one value per original batch key.
+- Repeated keys share request-scoped batching and caching. A separate GraphQL request gets a fresh lookup.
+- Missing profiles become null and are cached within that request.
+- The author mapper populates both deprecated `User.name` and `User.displayName` from the service's displayName.
+- Dependency failures become `Author information temporarily unavailable` with code SERVICE_UNAVAILABLE at each affected author field path.
+- The existing nullable author field preserves post data. One failed batch can produce several author errors while retaining every visible post.
+- Queries without author selections never load profile keys and do not call the user service.
+
+No public schema change was required. Object visibility is still enforced by the backend post service before author resolution, and authentication remains independent of the profile-service HTTP path.
+
+### Test boundaries
+
+The loader unit tests verify ordering, missing values, repeated-key deduplication, caching, separate request caches, empty inputs, and propagation of dependency failures.
+
+Existing MongoDB authorization integration fixtures now use `backend/tests/helpers/profile-loader.ts`: a test-only adapter that supplies stored fixture profiles to the production DataLoader through the UserServiceClient interface. This keeps existing authorization tests independent of a running user-service container. It does not prove HTTP transport; that boundary is covered by the client tests and the real Docker checks.
+
+Focused single-post integration tests inject a controlled profile client and check both public name fields, missing authors, dependency-error paths, preserved post data, and absence of calls when author is not selected. List tests check repeated authors in one batch, fresh lookups for another request, multiple author error paths from a failed batch, and no lookup for lists without authors.
+
+The old `backend/src/loaders.ts` direct-MongoDB loader has been removed. The updated `backend/src/check-loader.ts` uses the real HTTP client and checks seeded profile ordering, a missing profile, repeated keys, cached loads, and request isolation:
+
+```sh
+docker compose up -d user-service
+docker compose exec backend node --import tsx/esm src/check-loader.ts
+```
+
+This loader-check command intentionally omits telemetry preloading. Inspect distributed tracing through the running GraphQL application or the separately instrumented client-check script.
+
+### Real Docker verification recorded for issue #67
+
+The developer reported successful checks and manually verified the following:
+
+| Scenario | Observed result |
+| --- | --- |
+| Posts query with author fields | Authors resolve; name and displayName match |
+| Corresponding POST /graphql trace | Both service names appear within one trace |
+| User service stopped | Post IDs and titles remain; authors are null with SERVICE_UNAVAILABLE errors |
+| Query without authors during the outage | Post data succeeds without profile dependency errors |
+| User service restarted | Subsequent author queries resolve again |
+
+To repeat the outage check locally:
+
+```sh
+docker compose stop user-service
+# Run the posts query with authors, then without authors.
+docker compose start user-service
+# Repeat the author query and confirm recovery.
+```
+
+Use these checks in addition to automated tests; do not interpret HTTP 200 alone as an error-free GraphQL operation. Consult the errors array and field paths.
+
+### Retained tradeoffs and scope
+
+Both services still use the same local MongoDB deployment under the documented transitional ownership arrangement. Invalid stored profiles fail their whole batch. Per-ID error outcomes and federation implementation are not follow-up scope for this feature.
+
+Remaining deployment concerns include independent database permissions and lifecycle ownership, aggregate operation limits, and bounded shutdown. These are limitations rather than changes included in issue #67.

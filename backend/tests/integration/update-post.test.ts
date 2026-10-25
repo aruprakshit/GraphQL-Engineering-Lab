@@ -52,7 +52,7 @@ import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 
 // Purpose: Check service invariants first, then verify the public mutation enforces them too.
 test("post title editing service", async (t) => {
@@ -366,9 +366,8 @@ test("post title editing service", async (t) => {
           requestId: randomUUID(),
           database: requestDatabase,
           logDatabaseCall: () => {},
-          userLoader: createUserLoader(
+          userLoader: createTestProfileLoader(
             requestDatabase,
-            () => {},
             "update-post-test",
           ),
           sessionToken: token,

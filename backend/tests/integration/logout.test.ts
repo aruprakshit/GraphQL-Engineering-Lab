@@ -34,7 +34,7 @@ import {
   revokeSession,
 } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 
 // Purpose: Compare cookie-clearing callbacks with actual MongoDB revocation, not response data alone.
 test("GraphQL logout", async (t) => {
@@ -85,7 +85,7 @@ test("GraphQL logout", async (t) => {
         requestId: randomUUID(),
         database: requestDatabase,
         logDatabaseCall: () => {},
-        userLoader: createUserLoader(requestDatabase, () => {}, "logout-test"),
+        userLoader: createTestProfileLoader(requestDatabase, "logout-test"),
         sessionToken: readSessionCookie(cookieHeader),
         getActor: async () => unexpectedCall(),
         verifyCredentials: async () => unexpectedCall(),
