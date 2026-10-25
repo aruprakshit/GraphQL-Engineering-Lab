@@ -18,6 +18,8 @@ services:
       OTEL_METRICS_EXPORTER: none
       OTEL_LOGS_EXPORTER: none
       AUTH_ALLOWED_ORIGIN: http://localhost:4000
+      USER_SERVICE_URL: http://user-service:4001
+      USER_SERVICE_TOKEN: "${USER_SERVICE_TOKEN:?Set USER_SERVICE_TOKEN in .env}"
     depends_on:
       mongo:
         condition: service_healthy
