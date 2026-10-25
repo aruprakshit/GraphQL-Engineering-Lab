@@ -39,7 +39,7 @@ import {
 import { generateSessionToken } from "../../src/auth/session-tokens.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 
 const query = `
   query CurrentUser {
@@ -100,7 +100,7 @@ test("GraphQL current user", async (t) => {
         requestId: randomUUID(),
         database: requestDatabase,
         logDatabaseCall: () => {},
-        userLoader: createUserLoader(requestDatabase, () => {}, "me-test"),
+        userLoader: createTestProfileLoader(requestDatabase, "me-test"),
         getActor: createRequestActor(() =>
           resolveSession(requestDatabase, token),
         ),

@@ -42,7 +42,7 @@ import { hashPassword } from "../../src/auth/passwords.js";
 import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 
 // Purpose: Check single-record authorization at the service and GraphQL boundaries.
 test("single-post visibility service", async (t) => {
@@ -280,9 +280,8 @@ test("single-post visibility service", async (t) => {
           requestId: randomUUID(),
           database: requestDatabase,
           logDatabaseCall: () => {},
-          userLoader: createUserLoader(
+          userLoader: createTestProfileLoader(
             requestDatabase,
-            () => {},
             "find-post-test",
           ),
           sessionToken: token,

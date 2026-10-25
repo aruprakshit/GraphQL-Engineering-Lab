@@ -35,7 +35,7 @@ import type {
 import { createCredentialVerifier } from "../../src/auth/credentials.js";
 import { hashPassword } from "../../src/auth/passwords.js";
 import { hashSessionToken } from "../../src/auth/session-tokens.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 import { createAuthRequestGuard } from "../../src/auth/request-guard.js";
 import { createLoginAttemptGuard } from "../../src/auth/login-attempt.js";
 import { createLoginRateLimiter } from "../../src/auth/login-rate-limit.js";
@@ -110,7 +110,7 @@ test("GraphQL login", async (t) => {
         requestId: randomUUID(),
         database: options.database ?? database,
         logDatabaseCall: () => {},
-        userLoader: createUserLoader(database, () => {}, "login-test"),
+        userLoader: createTestProfileLoader(database, "login-test"),
         verifyCredentials: options.verifyCredentials ?? verifyCredentials,
         assertAuthRequest: () => {
           assertAuthRequest({

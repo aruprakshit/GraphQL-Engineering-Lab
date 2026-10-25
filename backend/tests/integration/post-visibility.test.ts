@@ -46,7 +46,7 @@ import { hashPassword } from "../../src/auth/passwords.js";
 import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
-import { createUserLoader } from "../../src/loaders.js";
+import { createTestProfileLoader } from "../helpers/profile-loader.js";
 import { encodePostCursor } from "../../src/pagination.js";
 import { InvalidPostStatusError } from "../../src/posts/errors.js";
 import type { ListPostsOptions } from "../../src/posts/service.js";
@@ -355,9 +355,8 @@ test("post service visibility and pagination", async (t) => {
             requestId: randomUUID(),
             database,
             logDatabaseCall: () => {},
-            userLoader: createUserLoader(
+            userLoader: createTestProfileLoader(
               database,
-              () => {},
               "post-visibility-test",
             ),
             sessionToken: token,
