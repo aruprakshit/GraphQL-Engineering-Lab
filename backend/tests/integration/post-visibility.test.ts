@@ -47,6 +47,9 @@ import { createSession, resolveSession } from "../../src/auth/sessions.js";
 import { readSessionCookie } from "../../src/auth/session-cookie.js";
 import { createRequestActor } from "../../src/auth/request-actor.js";
 import { createTestProfileLoader } from "../helpers/profile-loader.js";
+import { createProfileLoader } from "../../src/user-service/loader.js";
+import type { UserServiceClient } from "../../src/user-service/types.js";
+import { UserServiceUnavailableError } from "../../src/user-service/errors.js";
 import { encodePostCursor } from "../../src/pagination.js";
 import { InvalidPostStatusError } from "../../src/posts/errors.js";
 import type { ListPostsOptions } from "../../src/posts/service.js";
@@ -342,6 +345,7 @@ test("post service visibility and pagination", async (t) => {
           options: {
             source?: string;
             variables?: Record<string, unknown>;
+            profileClient?: UserServiceClient;
           } = {},
         ) {
           const cookie = session ? `session=${session.token}` : undefined;
@@ -355,10 +359,12 @@ test("post service visibility and pagination", async (t) => {
             requestId: randomUUID(),
             database,
             logDatabaseCall: () => {},
-            userLoader: createTestProfileLoader(
-              database,
-              "post-visibility-test",
-            ),
+            userLoader: options.profileClient
+              ? createProfileLoader(
+                  options.profileClient,
+                  "post-visibility-test",
+                )
+              : createTestProfileLoader(database, "post-visibility-test"),
             sessionToken: token,
             getActor: createRequestActor(() =>
               resolveSession(authenticationDatabase, token),
@@ -378,6 +384,220 @@ test("post service visibility and pagination", async (t) => {
             contextValue: context,
           });
         }
+        await t.test(
+          "batches repeated authors and isolates request caches",
+          async () => {
+            // Why: Ada's visible list contains four posts but only two authors.
+            // A second GraphQL request must perform its own lookup.
+
+            // Arrange
+            const calls: string[][] = [];
+            const profileClient: UserServiceClient = {
+              async findProfiles(ids) {
+                calls.push([...ids]);
+
+                // Deliberately return profiles in a different order.
+                return [
+                  { id: "ada", displayName: "Ada" },
+                  { id: "grace", displayName: "Grace" },
+                ];
+              },
+            };
+            const source = /* GraphQL */ `
+              query ListAuthors {
+                posts(first: 20) {
+                  edges {
+                    node {
+                      id
+                      author {
+                        id
+                        name
+                        displayName
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            // Act
+            const first = await executePosts(sessions.ada, 20, null, database, {
+              source,
+              profileClient,
+            });
+            const second = await executePosts(
+              sessions.ada,
+              20,
+              null,
+              database,
+              {
+                source,
+                profileClient,
+              },
+            );
+
+            // Assert
+            assert.equal(first.errors, undefined);
+            assert.equal(second.errors, undefined);
+            const expected = {
+              posts: {
+                edges: [
+                  {
+                    node: {
+                      id: "post-01",
+                      author: {
+                        id: "grace",
+                        name: "Grace",
+                        displayName: "Grace",
+                      },
+                    },
+                  },
+                  {
+                    node: {
+                      id: "post-03",
+                      author: { id: "ada", name: "Ada", displayName: "Ada" },
+                    },
+                  },
+                  {
+                    node: {
+                      id: "post-04",
+                      author: { id: "ada", name: "Ada", displayName: "Ada" },
+                    },
+                  },
+                  {
+                    node: {
+                      id: "post-06",
+                      author: { id: "ada", name: "Ada", displayName: "Ada" },
+                    },
+                  },
+                ],
+              },
+            };
+            assert.equal(JSON.stringify(first.data), JSON.stringify(expected));
+            assert.equal(JSON.stringify(second.data), JSON.stringify(expected));
+            assert.deepEqual(calls, [
+              ["grace", "ada"],
+              ["grace", "ada"],
+            ]);
+          },
+        );
+
+        await t.test(
+          "preserves the post list when the profile batch fails",
+          async () => {
+            // Why: one failed batch can affect several authors, but nullable
+            // author fields must preserve every visible post and its ID.
+
+            // Arrange
+            let calls = 0;
+            const profileClient: UserServiceClient = {
+              async findProfiles() {
+                calls += 1;
+                throw new UserServiceUnavailableError("NETWORK_ERROR");
+              },
+            };
+            const source = /* GraphQL */ `
+              query UnavailableListAuthors {
+                posts(first: 20) {
+                  edges {
+                    node {
+                      id
+                      author {
+                        id
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            // Act
+            const result = await executePosts(null, 20, null, database, {
+              source,
+              profileClient,
+            });
+
+            // Assert
+            assert.equal(calls, 1);
+            assert.equal(result.errors?.length, 2);
+            for (const error of result.errors ?? []) {
+              assert.equal(
+                error.message,
+                "Author information temporarily unavailable",
+              );
+              assert.equal(error.extensions.code, "SERVICE_UNAVAILABLE");
+            }
+            // Error ordering need not match response-field ordering.
+            assert.deepEqual(
+              result.errors?.map((error) => JSON.stringify(error.path)).sort(),
+              [
+                JSON.stringify(["posts", "edges", 0, "node", "author"]),
+                JSON.stringify(["posts", "edges", 1, "node", "author"]),
+              ].sort(),
+            );
+            assert.equal(
+              JSON.stringify(result.data),
+              JSON.stringify({
+                posts: {
+                  edges: [
+                    { node: { id: "post-01", author: null } },
+                    { node: { id: "post-04", author: null } },
+                  ],
+                },
+              }),
+            );
+          },
+        );
+
+        await t.test(
+          "does not fetch profiles for lists without author selections",
+          async () => {
+            // Why: GraphQL should resolve only requested fields. A profile-service
+            // outage must not affect a list query that selects post IDs alone.
+
+            // Arrange
+            let calls = 0;
+            const profileClient: UserServiceClient = {
+              async findProfiles() {
+                calls += 1;
+                throw new UserServiceUnavailableError("NETWORK_ERROR");
+              },
+            };
+            const source = /* GraphQL */ `
+              query ListWithoutAuthors {
+                posts(first: 20) {
+                  edges {
+                    node {
+                      id
+                    }
+                  }
+                }
+              }
+            `;
+
+            // Act
+            const result = await executePosts(null, 20, null, database, {
+              source,
+              profileClient,
+            });
+
+            // Assert
+            assert.equal(result.errors, undefined);
+            assert.equal(calls, 0);
+            assert.equal(
+              JSON.stringify(result.data),
+              JSON.stringify({
+                posts: {
+                  edges: [
+                    { node: { id: "post-01" } },
+                    { node: { id: "post-04" } },
+                  ],
+                },
+              }),
+            );
+          },
+        );
+
         const filteredSource = /* GraphQL */ `
           query FilteredPosts(
             $first: Int!
